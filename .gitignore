@@ -1,0 +1,130 @@
+# ============================================================
+
+# Python
+
+# ============================================================
+
+**pycache**/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+*$py.class
+
+# Virtual environments
+
+.venv/
+venv/
+env/
+ENV/
+
+# Jupyter
+
+.ipynb_checkpoints/
+
+# IDE / editor
+
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+
+.DS_Store
+Thumbs.db
+
+# ============================================================
+
+# Dataset files
+
+# ============================================================
+
+data/
+dataset/
+datasets/
+raw_data/
+processed_data/
+
+# Multispectral / hyperspectral / UAV image files
+
+*.npy
+*.npz
+*.tif
+*.tiff
+*.raw
+*.hdr
+*.bsq
+*.bil
+*.bip
+*.envi
+
+# Large image/data folders
+
+HR_npy/
+LR_x2_npy/
+LR_x3_npy/
+LR_x4_npy/
+masks/
+metadata/
+rgb_preview/
+false_color/
+overlay/
+
+# ============================================================
+
+# Model checkpoints
+
+# ============================================================
+
+*.pth
+*.pt
+*.ckpt
+*.onnx
+sr_checkpoints/
+checkpoints/
+weights/
+models/
+
+# ============================================================
+
+# Training / evaluation outputs
+
+# ============================================================
+
+outputs/
+results/
+*_RESULTS/
+
+sr_logs/
+sr_preview/
+sr_preview_zoom/
+sr_diff_map/
+sr_error_maps/
+train_loss_plots/
+
+SR_*_npy/
+SR_x**joint5ch**_npy/
+SR_x**bandwise**_npy/
+
+metrics_*.csv
+summary_*.csv
+summary_*.json
+train_history_*.csv
+train_history_*.xlsx
+run_config*.json
+run_time_summary*.csv
+
+# ============================================================
+
+# Temporary / cache files
+
+# ============================================================
+
+*.log
+*.tmp
+*.bak
+*.cache
+.cache/
+temp/
+tmp/
