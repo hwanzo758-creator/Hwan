@@ -27,6 +27,7 @@
 # Features:
 # - NaN/Inf 포함 scene 자동 제외
 # - 이미지 크기 기반 HR_PATCH_SIZE 자동 선택
+# - LR 이미지 크기 기반 TILE_LR_SIZE 자동 선택
 # - Joint 5-channel SR
 # - Band-wise SR ablation
 # - 6 methods:
@@ -96,6 +97,7 @@ import torch.nn.functional as F
 #   SAVE_HR_NPY = True
 #   SAVE_LR_NPY = True
 #   SAVE_MASK_NPY = False
+#   SAVE_PREVIEW = False
 #   SAVE_OVERLAY = False
 #   SAVE_METADATA = False
 #
@@ -125,7 +127,7 @@ OUTPUT_ROOT = Path(
 # 예: "all_crop_model_compare", "all_crop_x4_scale_compare", "test_run_001"
 # NDVI 확인용 결과 폴더입니다.
 # 기존 전체 결과/metrics를 덮어쓰지 않기 위해 별도 RUN_NAME을 사용합니다.
-RUN_NAME = "final_train_only_loss_curves"
+RUN_NAME = "final_srcnn_improved_train_missing_ckpt"
 
 # 기존 훈련 checkpoint가 저장되어 있는 원본 RUN_NAME입니다.
 # 모델은 여기서 불러오고, 새 NDVI/metric 결과는 위 RUN_NAME 폴더에 저장합니다.
@@ -151,6 +153,21 @@ FAST_STARTUP_SCAN = True
 MAX_RECORDS_FOR_TEST = None
 
 # ============================================================
+# Evaluation sample setting
+# ============================================================
+# 평가 시간을 줄이기 위해 최종 평가 scene을 랜덤 샘플링합니다.
+# - EVAL_RECORD_SOURCE = "test_split" : train/val/test 분할 후 test split에서 샘플링
+# - EVAL_RECORD_SOURCE = "all_clean"  : 품질 필터 통과 전체 records에서 샘플링
+# - EVAL_SAMPLE_SIZE = 100             : 100장 랜덤 평가
+# - EVAL_SAMPLE_SIZE = 100            : 선택된 source 전체 평가
+EVAL_RECORD_SOURCE = "test_split"
+EVAL_SAMPLE_SIZE = 100
+EVAL_SAMPLE_RANDOM = True
+COMPUTE_BANDWISE_SSIM = False
+COMPUTE_SHARPNESS_METRICS = False
+COMPUTE_GLOBAL_SSIM = True
+
+# 이번 파일은 quick test가 아니라 기존 전체 preset을 유지합니다.
 USE_QUICK_TEST_PRESET = False
 
 
@@ -190,11 +207,11 @@ EXPERIMENT_PRESET = "full_eval"
 #   USER_SCALES = [3]        # x3만
 #   USER_SCALES = [4]        # x4만
 #   USER_SCALES = [2, 4]     # x2, x4만
-#   USER_SCALES = [2, 3, 4]  # 전체
+#   USER_SCALES = [4]  # 전체
 #
 # 주의: [3] [2] [4]처럼 연속 리스트를 쓰는 것은 Python 문법상 의도와 다르게 동작할 수 있습니다.
 # 반드시 아래처럼 하나의 리스트 안에 원하는 scale을 넣으세요.
-USER_SCALES = [3]
+USER_SCALES = [4]
 
 # ============================================================
 # Preset definitions
@@ -217,7 +234,11 @@ PRESETS = {
         "RUN_BANDWISE_ABLATION": True,
         "EPOCHS": 50,
         "PATCHES_PER_EPOCH": 1000,
+        "SAVE_SR_NPY": False,
+        "SAVE_PREVIEW": True,
+        "SAVE_DIFF_MAP": True,
         "SAVE_CHECKPOINT": True,
+        "MAX_PREVIEW_PER_METHOD": 10,
     },
 
     # 모델 비교 중심: joint5ch 위주, bandwise는 비활성화
@@ -229,7 +250,11 @@ PRESETS = {
         "RUN_BANDWISE_ABLATION": False,
         "EPOCHS": 20,
         "PATCHES_PER_EPOCH": 500,
+        "SAVE_SR_NPY": False,
+        "SAVE_PREVIEW": True,
+        "SAVE_DIFF_MAP": True,
         "SAVE_CHECKPOINT": True,
+        "MAX_PREVIEW_PER_METHOD": 10,
     },
 
     # scale 비교 중심: 대표 모델만 실행
@@ -241,7 +266,11 @@ PRESETS = {
         "RUN_BANDWISE_ABLATION": False,
         "EPOCHS": 20,
         "PATCHES_PER_EPOCH": 400,
+        "SAVE_SR_NPY": False,
+        "SAVE_PREVIEW": True,
+        "SAVE_DIFF_MAP": True,
         "SAVE_CHECKPOINT": True,
+        "MAX_PREVIEW_PER_METHOD": 5,
     },
 
     # joint5ch vs bandwise 비교
@@ -253,7 +282,11 @@ PRESETS = {
         "RUN_BANDWISE_ABLATION": True,
         "EPOCHS": 20,
         "PATCHES_PER_EPOCH": 400,
+        "SAVE_SR_NPY": False,
+        "SAVE_PREVIEW": True,
+        "SAVE_DIFF_MAP": True,
         "SAVE_CHECKPOINT": True,
+        "MAX_PREVIEW_PER_METHOD": 5,
     },
 }
 
@@ -261,6 +294,7 @@ PRESETS = {
 PRESET_ALIASES = {
     "final_full_x234": "full_eval",
     "full_paper": "full_eval",
+    "x3_aligned_eval_only": "full_eval",
 }
 
 preset_key = PRESET_ALIASES.get(EXPERIMENT_PRESET, EXPERIMENT_PRESET)
@@ -329,9 +363,12 @@ POSTPROCESS_ONLY = False
 
 # checkpoint가 있으면 기존 모델을 사용하고, 없으면 해당 모델만 재훈련합니다.
 # True이면 checkpoint 없는 모델은 skip, False이면 checkpoint 없는 모델은 재훈련.
+EVAL_ONLY_NO_TRAIN = False
 
 SKIP_TRAIN_IF_CHECKPOINT_EXISTS = True
 # NDVI 이미지를 새로 만들기 위해 기존 metrics가 있어도 평가를 다시 수행합니다.
+SKIP_EVAL_IF_METRICS_EXISTS = False
+LOAD_EXISTING_METRICS_WHEN_SKIP_EVAL = False
 
 EARLY_STOPPING = True
 PATIENCE = 10
@@ -379,17 +416,23 @@ LR = 1e-4
 WEIGHT_DECAY = 1e-6
 
 USE_DYNAMIC_PATCH_SIZE = True
+USE_DYNAMIC_TILE_SIZE = True
 
 PATCH_SIZE_CANDIDATES = [192, 144, 120, 96, 72, 48, 36, 24]
 MIN_HR_PATCH_SIZE = 24
 
+TILE_SIZE_CANDIDATES = [512, 384, 256, 192, 128, 96, 64]
+MIN_LR_TILE_SIZE = 64
 
 HR_PATCH_SIZE = 96
-VAL_PATCHES_PER_SCENE = 5
+TILE_LR_SIZE = 256
+TILE_OVERLAP = 16
 
 # V11: SwinIR-like uses global MultiheadAttention over all pixels in each tile.
 # Large inference tiles can make attention extremely slow because cost grows roughly with token_count^2.
 # Therefore SwinIR evaluation uses a smaller tile than CNN-based models.
+SWINIR_TILE_LR_SIZE = 64
+SWINIR_TILE_OVERLAP = 8
 
 TRAIN_RATIO = 0.7
 VAL_RATIO = 0.15
@@ -470,20 +513,90 @@ FREQ_WEIGHT = 0.03
 SAM_WEIGHT = 0.10
 VI_WEIGHT = 0.10
 
+# ============================================================
+# Loss ablation settings
+# ============================================================
+# SAM and VI need the full 5-band cube, so these ablations run on joint5ch
+# trainable models by default. Bicubic is kept as a single no-training baseline.
+DEFAULT_LOSS_PROFILE_ID = "full"
+CURRENT_LOSS_PROFILE_ID = DEFAULT_LOSS_PROFILE_ID
+RUN_LOSS_ABLATION = True
+LOSS_ABLATION_METHODS = ["srcnn", "edsr", "rcan", "swinir", "esrgan"]
+LOSS_ABLATION_MODES = ["joint5ch"]
+LOSS_ABLATION_INCLUDE_FULL_LOSS_BASELINE = True
+LOSS_ABLATION_PROFILE_IDS = ["l1", "l1_sam", "l1_sam_vi"]
+
+LOSS_PROFILES = OrderedDict([
+    ("full", {
+        "label": "Full loss",
+        "l1": L1_WEIGHT,
+        "charbonnier": CHARBONNIER_WEIGHT,
+        "ssim": SSIM_WEIGHT,
+        "grad": GRAD_WEIGHT,
+        "edge": EDGE_WEIGHT,
+        "freq": FREQ_WEIGHT,
+        "sam": SAM_WEIGHT,
+        "vi": VI_WEIGHT,
+    }),
+    ("l1", {
+        "label": "L1",
+        "l1": 1.0,
+        "charbonnier": 0.0,
+        "ssim": 0.0,
+        "grad": 0.0,
+        "edge": 0.0,
+        "freq": 0.0,
+        "sam": 0.0,
+        "vi": 0.0,
+    }),
+    ("l1_sam", {
+        "label": "L1 + SAM",
+        "l1": 1.0,
+        "charbonnier": 0.0,
+        "ssim": 0.0,
+        "grad": 0.0,
+        "edge": 0.0,
+        "freq": 0.0,
+        "sam": SAM_WEIGHT,
+        "vi": 0.0,
+    }),
+    ("l1_sam_vi", {
+        "label": "L1 + SAM + VI",
+        "l1": 1.0,
+        "charbonnier": 0.0,
+        "ssim": 0.0,
+        "grad": 0.0,
+        "edge": 0.0,
+        "freq": 0.0,
+        "sam": SAM_WEIGHT,
+        "vi": VI_WEIGHT,
+    }),
+])
+
 ESRGAN_PRETRAIN_EPOCHS = 20
 ESRGAN_ADV_WEIGHT = 1e-3
 ESRGAN_L1_WEIGHT = 1.0
 ESRGAN_SAM_WEIGHT = 0.05
 ESRGAN_VI_WEIGHT = 0.05
 
+# MAX_PREVIEW_PER_METHOD는 preset별로 이미 위에서 설정됨.
 # 여기서 다시 덮어쓰면 model_compare의 5장이 30장으로 바뀌므로 유지해야 함.
+# MAX_PREVIEW_PER_METHOD = 5 if FAST_MODE else 30
 
 BANDS = ["B", "G", "R", "E", "N"]
 BAND_NAMES = ["Blue", "Green", "Red", "RedEdge", "NIR"]
 CHANNELS = 5
 
 # Preview / error-map / excel summary options
+ZOOM_CROP_SIZE = 128
+ZOOM_MIN_VALID_RATIO = 0.60
+ERROR_MAP_PERCENTILE = 99.0
+SAVE_ZOOM_PREVIEW = True
+SAVE_EXCEL_SUMMARY = True
+SAVE_TRAIN_LOSS_PLOTS = True
+SAVE_ERROR_MAPS = True
 SAVE_BAND_ERROR_MAPS = False
+SAVE_ERROR_MAP_PANEL = True
 
 # Preview 저장 방식
 # True  : HR, LR-up, SR 이미지를 각각 따로 저장
@@ -491,6 +604,72 @@ SAVE_BAND_ERROR_MAPS = False
 SAVE_SEPARATE_PREVIEW = True
 
 RUN_CONFIG_CACHE = {}
+
+
+def set_current_loss_profile(loss_profile_id=None):
+    global CURRENT_LOSS_PROFILE_ID
+    profile_id = loss_profile_id or DEFAULT_LOSS_PROFILE_ID
+    if profile_id not in LOSS_PROFILES:
+        raise ValueError(f"Unsupported loss profile: {profile_id}. Valid profiles: {list(LOSS_PROFILES.keys())}")
+    CURRENT_LOSS_PROFILE_ID = profile_id
+
+
+def get_loss_profile(loss_profile_id=None):
+    profile_id = loss_profile_id or CURRENT_LOSS_PROFILE_ID
+    if profile_id not in LOSS_PROFILES:
+        raise ValueError(f"Unsupported loss profile: {profile_id}. Valid profiles: {list(LOSS_PROFILES.keys())}")
+    return LOSS_PROFILES[profile_id]
+
+
+def get_loss_profile_label(loss_profile_id=None):
+    profile_id = loss_profile_id or CURRENT_LOSS_PROFILE_ID
+    return str(get_loss_profile(profile_id).get("label", profile_id))
+
+
+def get_loss_tag(loss_profile_id=None):
+    profile_id = loss_profile_id or CURRENT_LOSS_PROFILE_ID
+    if profile_id == DEFAULT_LOSS_PROFILE_ID:
+        return ""
+    return f"loss_{profile_id}"
+
+
+def get_case_method_name(method, loss_profile_id=None):
+    tag = get_loss_tag(loss_profile_id)
+    return method if tag == "" else f"{method}_{tag}"
+
+
+def get_loss_profile_ids_for_case(mode, method):
+    profile_ids = [DEFAULT_LOSS_PROFILE_ID]
+
+    if (
+        RUN_LOSS_ABLATION
+        and method != "bicubic"
+        and mode in LOSS_ABLATION_MODES
+        and method in LOSS_ABLATION_METHODS
+    ):
+        if not LOSS_ABLATION_INCLUDE_FULL_LOSS_BASELINE:
+            profile_ids = []
+        profile_ids.extend(LOSS_ABLATION_PROFILE_IDS)
+
+    valid_profile_ids = []
+    for profile_id in profile_ids:
+        if profile_id not in LOSS_PROFILES:
+            raise ValueError(f"Unknown loss ablation profile: {profile_id}")
+        if profile_id not in valid_profile_ids:
+            valid_profile_ids.append(profile_id)
+    return valid_profile_ids
+
+
+def count_eval_cases_for_methods(mode, methods):
+    return sum(len(get_loss_profile_ids_for_case(mode, method)) for method in methods)
+
+
+def count_train_jobs_for_methods(mode, methods):
+    return sum(
+        len(get_loss_profile_ids_for_case(mode, method))
+        for method in methods
+        if method != "bicubic"
+    )
 
 
 # ============================================================
@@ -534,9 +713,35 @@ def count_model_parameters(model):
     }
 
 
+def get_image_megapixels(cube):
+    h, w = cube.shape[:2]
+    return float(h * w / 1e6)
+
+
 def ensure_dirs():
     (OUTPUT_DIR / "sr_logs").mkdir(parents=True, exist_ok=True)
-    CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
+    (OUTPUT_DIR / "sr_checkpoints").mkdir(parents=True, exist_ok=True)
+
+    if SAVE_TRAIN_LOSS_PLOTS:
+        (OUTPUT_DIR / "sr_logs" / "loss_curves").mkdir(parents=True, exist_ok=True)
+
+    if SAVE_PREVIEW:
+        (OUTPUT_DIR / "sr_preview").mkdir(parents=True, exist_ok=True)
+
+    if SAVE_ZOOM_PREVIEW:
+        (OUTPUT_DIR / "sr_preview_zoom").mkdir(parents=True, exist_ok=True)
+
+    if SAVE_DIFF_MAP:
+        (OUTPUT_DIR / "sr_diff_map").mkdir(parents=True, exist_ok=True)
+
+    if SAVE_ERROR_MAPS:
+        (OUTPUT_DIR / "sr_error_maps").mkdir(parents=True, exist_ok=True)
+
+    for scale in SCALES:
+        for mode in EXPERIMENT_MODES:
+            for method in METHODS_TO_RUN:
+                out_dir = OUTPUT_DIR / f"SR_x{scale}_{mode}_{method}_npy"
+                out_dir.mkdir(parents=True, exist_ok=True)
 
 
 def write_dict_csv(path, rows):
@@ -557,6 +762,72 @@ def write_dict_csv(path, rows):
             writer.writerow(row)
 
     print(f"[INFO] Saved CSV: {path}")
+
+
+def save_train_loss_plot(history, mode, case_method, scale, band_name=None, is_esrgan=False):
+    if not SAVE_TRAIN_LOSS_PLOTS or len(history) == 0:
+        return ""
+
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except Exception as e:
+        print(f"[WARN] Failed to import matplotlib. Skip loss curve plot: {e}")
+        return ""
+
+    try:
+        epochs = [int(row.get("epoch", idx + 1)) for idx, row in enumerate(history)]
+
+        def values_for(key):
+            values = []
+            for row in history:
+                value = row.get(key, np.nan)
+                try:
+                    value = float(value)
+                except Exception:
+                    value = np.nan
+                values.append(value if np.isfinite(value) else np.nan)
+            return values
+
+        fig, ax = plt.subplots(figsize=(8.5, 5.0), dpi=150)
+
+        if is_esrgan:
+            ax.plot(epochs, values_for("g_loss"), label="Generator loss", linewidth=1.8)
+            ax.plot(epochs, values_for("d_loss"), label="Discriminator loss", linewidth=1.5, alpha=0.75)
+            ax.plot(epochs, values_for("val_loss"), label="Validation loss", linewidth=1.8)
+        else:
+            ax.plot(epochs, values_for("train_loss"), label="Train loss", linewidth=1.8)
+            ax.plot(epochs, values_for("val_loss"), label="Validation loss", linewidth=1.8)
+
+        loss_profile_label = str(history[-1].get("loss_profile_label", ""))
+        title_parts = [mode, case_method, f"x{scale}"]
+        if band_name is not None:
+            title_parts.append(str(band_name))
+        if loss_profile_label:
+            title_parts.append(loss_profile_label)
+
+        ax.set_title(" | ".join(title_parts))
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel("Loss")
+        ax.grid(True, alpha=0.25)
+        ax.legend(frameon=False)
+        fig.tight_layout()
+
+        if mode == "joint5ch":
+            filename = f"loss_curve_{mode}_{case_method}_x{scale}.png"
+        else:
+            filename = f"loss_curve_{mode}_{case_method}_{band_name}_x{scale}.png"
+
+        out_path = OUTPUT_DIR / "sr_logs" / "loss_curves" / filename
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(out_path)
+        plt.close(fig)
+        print(f"[INFO] Saved loss curve plot: {out_path}")
+        return str(out_path)
+    except Exception as e:
+        print(f"[WARN] Failed to save loss curve plot: {mode} {case_method} x{scale} | {e}")
+        return ""
 
 
 def is_clean_npy(path):
@@ -820,6 +1091,56 @@ def split_records(records):
     return train_records, val_records, test_records
 
 
+
+
+def select_eval_records(all_records, test_records):
+    """
+    Select final records for evaluation.
+
+    EVAL_RECORD_SOURCE:
+      - "test_split": sample from the held-out test split
+      - "all_clean" : sample from all quality-filtered records
+
+    EVAL_SAMPLE_SIZE=None means evaluate the entire selected source.
+    """
+    source = str(EVAL_RECORD_SOURCE).lower().strip()
+
+    if source in ["test", "test_split", "split"]:
+        pool = list(test_records)
+        source_name = "test_split"
+    elif source in ["all", "all_clean", "records"]:
+        pool = list(all_records)
+        source_name = "all_clean"
+    else:
+        raise ValueError(
+            f"Unsupported EVAL_RECORD_SOURCE={EVAL_RECORD_SOURCE}. "
+            "Use 'test_split' or 'all_clean'."
+        )
+
+    if len(pool) == 0:
+        raise RuntimeError("No records available for evaluation sampling.")
+
+    if EVAL_SAMPLE_SIZE is None:
+        selected = pool
+    else:
+        sample_n = min(int(EVAL_SAMPLE_SIZE), len(pool))
+        if bool(EVAL_SAMPLE_RANDOM):
+            rng = random.Random(RANDOM_SEED)
+            selected = rng.sample(pool, sample_n)
+        else:
+            selected = pool[:sample_n]
+
+    print("\n====================================")
+    print("Evaluation record selection")
+    print("====================================")
+    print(f"Source        : {source_name}")
+    print(f"Pool records  : {len(pool)}")
+    print(f"Sample size   : {EVAL_SAMPLE_SIZE}")
+    print(f"Random sample : {EVAL_SAMPLE_RANDOM}")
+    print(f"Eval records  : {len(selected)}")
+    print("====================================")
+
+    return selected
 
 
 def get_hr_path(record):
@@ -1287,9 +1608,28 @@ def normalize_cube(cube, norm_factor, valid_mask=None):
     return cube.astype(np.float32)
 
 
+def denormalize_cube(cube, norm_factor):
+    if INPUT_ALREADY_NORMALIZED:
+        # 추가 정규화를 하지 않았으므로 역정규화도 수행하지 않습니다.
+        return np.nan_to_num(cube.astype(np.float32), nan=0.0, posinf=1.5, neginf=0.0).astype(np.float32)
+
+    norm_factor = float(norm_factor)
+
+    if not np.isfinite(norm_factor) or norm_factor <= NORM_EPS:
+        norm_factor = 1.0
+
+    cube = cube.astype(np.float32) * max(norm_factor, NORM_EPS)
+
+    return cube.astype(np.float32)
+
+
 def np_to_tensor(cube):
     return torch.from_numpy(cube.transpose(2, 0, 1)).float()
 
+
+def tensor_to_np(tensor):
+    arr = tensor.detach().cpu().float().numpy()
+    return arr.transpose(1, 2, 0)
 
 def make_dataloader(dataset, batch_size, shuffle, num_workers, pin_memory=True):
     """
@@ -1389,19 +1729,75 @@ def choose_dynamic_hr_patch_size(records):
     return int(fallback)
 
 
+def choose_dynamic_tile_size(records):
+    _, lr_shapes_by_scale = get_dataset_shapes(records)
+
+    all_lr_shapes = []
+
+    for scale in SCALES:
+        all_lr_shapes.extend(lr_shapes_by_scale.get(scale, []))
+
+    if len(all_lr_shapes) == 0:
+        print(f"[WARN] Cannot determine LR shapes. Use default TILE_LR_SIZE={TILE_LR_SIZE}")
+        return TILE_LR_SIZE
+
+    min_lr_h = min([s[0] for s in all_lr_shapes])
+    min_lr_w = min([s[1] for s in all_lr_shapes])
+    min_lr_side = min(min_lr_h, min_lr_w)
+
+    print("\n====================================")
+    print("Dynamic LR tile size selection")
+    print("====================================")
+    print(f"Min LR height : {min_lr_h}")
+    print(f"Min LR width  : {min_lr_w}")
+    print(f"Min LR side   : {min_lr_side}")
+
+    for candidate in TILE_SIZE_CANDIDATES:
+        if candidate <= min_lr_side and candidate >= MIN_LR_TILE_SIZE:
+            print(f"[INFO] Selected TILE_LR_SIZE = {candidate}")
+            print("====================================")
+            return int(candidate)
+
+    fallback = max(MIN_LR_TILE_SIZE, min_lr_side)
+
+    print(f"[WARN] No tile candidate matched. Use fallback TILE_LR_SIZE = {fallback}")
+    print("====================================")
+
+    return int(fallback)
+
+
 def update_dynamic_sizes(records):
     global HR_PATCH_SIZE
+    global TILE_LR_SIZE
+    global TILE_OVERLAP
 
     if USE_DYNAMIC_PATCH_SIZE:
         HR_PATCH_SIZE = choose_dynamic_hr_patch_size(records)
 
+    if USE_DYNAMIC_TILE_SIZE:
+        TILE_LR_SIZE = choose_dynamic_tile_size(records)
 
+    TILE_OVERLAP = max(8, min(32, TILE_LR_SIZE // 16))
 
     print("\n====================================")
     print("Final dynamic size settings")
     print("====================================")
     print(f"HR_PATCH_SIZE = {HR_PATCH_SIZE}")
+    print(f"TILE_LR_SIZE  = {TILE_LR_SIZE}")
+    print(f"TILE_OVERLAP  = {TILE_OVERLAP}")
     print("====================================")
+
+
+def get_infer_tile_settings(method):
+    """Return method-specific tile size/overlap for full-image inference.
+
+    SwinIR-like in this script is a simplified global-attention baseline, not a
+    window-attention implementation. Its inference cost becomes very large when
+    TILE_LR_SIZE is large, so use a smaller tile only for swinir.
+    """
+    if str(method).lower() == "swinir":
+        return int(SWINIR_TILE_LR_SIZE), int(SWINIR_TILE_OVERLAP)
+    return int(TILE_LR_SIZE), int(TILE_OVERLAP)
 
 
 # ============================================================
@@ -1585,27 +1981,7 @@ class SRPatchDataset(Dataset):
         if self.train:
             return self.patches_per_epoch
 
-        return max(self.patches_per_epoch, 1)
-
-    def get_eval_patch_xy(self, idx, max_lr_y, max_lr_x):
-        positions = [
-            (0.50, 0.50),
-            (0.25, 0.25),
-            (0.25, 0.75),
-            (0.75, 0.25),
-            (0.75, 0.75),
-        ]
-        record_count = max(len(self.records), 1)
-        slot = (idx // record_count) % max(VAL_PATCHES_PER_SCENE, 1)
-        y_ratio, x_ratio = positions[slot % len(positions)]
-
-        y_lr = int(round(max_lr_y * y_ratio))
-        x_lr = int(round(max_lr_x * x_ratio))
-
-        y_lr = min(max(y_lr, 0), max_lr_y)
-        x_lr = min(max(x_lr, 0), max_lr_x)
-
-        return y_lr, x_lr
+        return max(len(self.records), 1)
 
     def select_channels(self, cube):
         if self.channels == 5:
@@ -1775,7 +2151,8 @@ class SRPatchDataset(Dataset):
                 y_lr = best_y_lr
                 x_lr = best_x_lr
         else:
-            y_lr, x_lr = self.get_eval_patch_xy(idx, max_lr_y, max_lr_x)
+            y_lr = max_lr_y // 2
+            x_lr = max_lr_x // 2
 
         y_hr = y_lr * self.scale
         x_hr = x_lr * self.scale
@@ -1846,12 +2223,6 @@ def make_activation(name):
     return nn.ReLU(inplace=True)
 
 
-def zero_init_conv(conv):
-    nn.init.zeros_(conv.weight)
-    if conv.bias is not None:
-        nn.init.zeros_(conv.bias)
-
-
 def make_upsampler(scale, nf, activation="relu"):
     layers = []
 
@@ -1902,7 +2273,6 @@ class SRCNN(nn.Module):
             nn.ReLU(inplace=True),
             nn.Conv2d(32, channels, kernel_size=5, padding=2),
         )
-        zero_init_conv(self.net[-1])
 
     def forward(self, x):
         base = F.interpolate(
@@ -1922,6 +2292,8 @@ class SRCNN(nn.Module):
             out = base + detail
         else:
             out = detail
+
+        out = torch.clamp(out, 0.0, 1.5)
 
         return out
 
@@ -1955,7 +2327,6 @@ class EDSR(nn.Module):
         self.body_conv = nn.Conv2d(nf, nf, kernel_size=3, padding=1)
         self.up = make_upsampler(scale, nf, activation="relu")
         self.tail = nn.Conv2d(nf, channels, kernel_size=3, padding=1)
-        zero_init_conv(self.tail)
 
     def forward(self, x):
         # Residual SR: bicubic upsample을 base로 두고 모델은 detail만 학습
@@ -1979,6 +2350,8 @@ class EDSR(nn.Module):
             out = base + detail
         else:
             out = detail
+
+        out = torch.clamp(out, 0.0, 1.5)
 
         return out
 
@@ -2051,7 +2424,6 @@ class RCAN(nn.Module):
         self.body_conv = nn.Conv2d(nf, nf, kernel_size=3, padding=1)
         self.up = make_upsampler(scale, nf, activation="relu")
         self.tail = nn.Conv2d(nf, channels, kernel_size=3, padding=1)
-        zero_init_conv(self.tail)
 
     def forward(self, x):
         base = F.interpolate(
@@ -2074,6 +2446,8 @@ class RCAN(nn.Module):
             out = base + detail
         else:
             out = detail
+
+        out = torch.clamp(out, 0.0, 1.5)
 
         return out
 
@@ -2131,7 +2505,6 @@ class SwinIRLike(nn.Module):
         self.body_conv = nn.Conv2d(dim, dim, kernel_size=3, padding=1)
         self.up = make_upsampler(scale, dim, activation="gelu")
         self.tail = nn.Conv2d(dim, channels, kernel_size=3, padding=1)
-        zero_init_conv(self.tail)
 
     def forward(self, x):
         base = F.interpolate(
@@ -2154,6 +2527,8 @@ class SwinIRLike(nn.Module):
             out = base + detail
         else:
             out = detail
+
+        out = torch.clamp(out, 0.0, 1.5)
 
         return out
 
@@ -2212,18 +2587,10 @@ class ESRGANGenerator(nn.Module):
 
         self.conv_hr = nn.Conv2d(nf, nf, kernel_size=3, padding=1)
         self.conv_last = nn.Conv2d(nf, channels, kernel_size=3, padding=1)
-        zero_init_conv(self.conv_last)
 
         self.lrelu = nn.LeakyReLU(0.2, inplace=True)
 
     def forward(self, x):
-        base = F.interpolate(
-            x,
-            scale_factor=self.scale,
-            mode="bicubic",
-            align_corners=False
-        )
-
         fea = self.conv_first(x)
 
         trunk = self.trunk(fea)
@@ -2233,12 +2600,8 @@ class ESRGANGenerator(nn.Module):
 
         out = self.up(fea)
         out = self.lrelu(self.conv_hr(out))
-        detail = self.conv_last(out)
-
-        if USE_RESIDUAL_SR:
-            out = base + detail
-        else:
-            out = detail
+        out = self.conv_last(out)
+        out = torch.clamp(out, 0.0, 1.5)
 
         return out
 
@@ -2309,6 +2672,15 @@ def masked_l1_loss(sr, hr, mask=None):
 
     mask = mask.float()
     loss = torch.abs(sr - hr) * mask
+    return loss.sum() / (mask.sum() + 1e-8)
+
+
+def masked_mse_loss(sr, hr, mask=None):
+    if mask is None or not USE_MASKED_LOSS:
+        return F.mse_loss(sr, hr)
+
+    mask = mask.float()
+    loss = (sr - hr) ** 2 * mask
     return loss.sum() / (mask.sum() + 1e-8)
 
 
@@ -2483,42 +2855,1114 @@ def frequency_loss(sr, hr, mask=None):
 
 
 def standard_sr_loss(sr, hr, mask=None):
-    l1 = masked_l1_loss(sr, hr, mask)
-    charb = masked_charbonnier_loss(sr, hr, mask)
-    ssim_l = masked_ssim_loss(sr, hr, mask)
-    freq = frequency_loss(sr, hr, mask)
+    profile = get_loss_profile()
+    loss = torch.tensor(0.0, device=sr.device)
+
+    if profile["l1"] != 0:
+        loss = loss + profile["l1"] * masked_l1_loss(sr, hr, mask)
+    if profile["charbonnier"] != 0:
+        loss = loss + profile["charbonnier"] * masked_charbonnier_loss(sr, hr, mask)
+    if profile["ssim"] != 0:
+        loss = loss + profile["ssim"] * masked_ssim_loss(sr, hr, mask)
+    if profile["freq"] != 0:
+        loss = loss + profile["freq"] * frequency_loss(sr, hr, mask)
 
     if USE_SHARPNESS_LOSS:
-        grad = gradient_loss(sr, hr, mask)
-        edge = laplacian_edge_loss(sr, hr, mask)
-    else:
-        grad = torch.tensor(0.0, device=sr.device)
-        edge = torch.tensor(0.0, device=sr.device)
+        if profile["grad"] != 0:
+            loss = loss + profile["grad"] * gradient_loss(sr, hr, mask)
+        if profile["edge"] != 0:
+            loss = loss + profile["edge"] * laplacian_edge_loss(sr, hr, mask)
 
     if sr.shape[1] == 5:
-        sam = sam_loss(sr, hr, mask)
-        vi = vi_loss(sr, hr, mask)
-        loss = (
-            L1_WEIGHT * l1 +
-            CHARBONNIER_WEIGHT * charb +
-            SSIM_WEIGHT * ssim_l +
-            GRAD_WEIGHT * grad +
-            EDGE_WEIGHT * edge +
-            FREQ_WEIGHT * freq +
-            SAM_WEIGHT * sam +
-            VI_WEIGHT * vi
-        )
-    else:
-        loss = (
-            L1_WEIGHT * l1 +
-            CHARBONNIER_WEIGHT * charb +
-            SSIM_WEIGHT * ssim_l +
-            GRAD_WEIGHT * grad +
-            EDGE_WEIGHT * edge +
-            FREQ_WEIGHT * freq
-        )
+        if profile["sam"] != 0:
+            loss = loss + profile["sam"] * sam_loss(sr, hr, mask)
+        if profile["vi"] != 0:
+            loss = loss + profile["vi"] * vi_loss(sr, hr, mask)
 
     return loss
+
+
+# ============================================================
+# 8. Metrics
+# ============================================================
+
+def crop_common_np(a, b):
+    h = min(a.shape[0], b.shape[0])
+    w = min(a.shape[1], b.shape[1])
+    c = min(a.shape[2], b.shape[2])
+
+    return a[:h, :w, :c], b[:h, :w, :c]
+
+
+def finite_pair(hr, sr):
+    hr, sr = crop_common_np(hr, sr)
+
+    valid = np.isfinite(hr) & np.isfinite(sr)
+
+    if valid.sum() == 0:
+        return None, None, None
+
+    return hr, sr, valid
+
+
+def calc_mse(hr, sr):
+    hr, sr, valid = finite_pair(hr, sr)
+
+    if valid is None:
+        return np.nan
+
+    diff = hr[valid] - sr[valid]
+
+    return float(np.mean(diff ** 2))
+
+
+def calc_rmse(hr, sr):
+    hr, sr, valid = finite_pair(hr, sr)
+
+    if valid is None:
+        return np.nan
+
+    diff = hr[valid] - sr[valid]
+
+    return float(np.sqrt(np.mean(diff ** 2)))
+
+
+def calc_mae(hr, sr):
+    hr, sr, valid = finite_pair(hr, sr)
+
+    if valid is None:
+        return np.nan
+
+    diff = np.abs(hr[valid] - sr[valid])
+
+    return float(np.mean(diff))
+
+
+def calc_psnr(hr, sr):
+    hr, sr, valid = finite_pair(hr, sr)
+
+    if valid is None:
+        return np.nan
+
+    diff = hr[valid] - sr[valid]
+    mse = np.mean(diff ** 2)
+
+    if not np.isfinite(mse):
+        return np.nan
+
+    if mse <= 1e-12:
+        return 99.0
+
+    hr_valid = hr[np.isfinite(hr)]
+
+    if len(hr_valid) > 0:
+        max_val = np.percentile(hr_valid, 99.5)
+    else:
+        max_val = 1.0
+
+    if not np.isfinite(max_val) or max_val <= 0:
+        max_val = 1.0
+
+    psnr = 20 * math.log10(max_val / math.sqrt(mse))
+
+    return float(psnr)
+
+
+def calc_r2(hr, sr):
+    hr, sr, valid = finite_pair(hr, sr)
+
+    if valid is None:
+        return np.nan
+
+    y_true = hr[valid].astype(np.float64)
+    y_pred = sr[valid].astype(np.float64)
+
+    ss_res = np.sum((y_true - y_pred) ** 2)
+    ss_tot = np.sum((y_true - np.mean(y_true)) ** 2)
+
+    if ss_tot <= 1e-12:
+        return np.nan
+
+    return float(1.0 - ss_res / ss_tot)
+
+
+def calc_sam_np(hr, sr):
+    hr, sr = crop_common_np(hr, sr)
+
+    channels = hr.shape[-1]
+
+    if channels < 2:
+        return np.nan
+
+    hr_f = hr.reshape(-1, channels).astype(np.float32)
+    sr_f = sr.reshape(-1, channels).astype(np.float32)
+
+    valid = np.isfinite(hr_f).all(axis=1) & np.isfinite(sr_f).all(axis=1)
+
+    if valid.sum() == 0:
+        return np.nan
+
+    hr_f = hr_f[valid]
+    sr_f = sr_f[valid]
+
+    dot = np.sum(hr_f * sr_f, axis=1)
+    norm_hr = np.linalg.norm(hr_f, axis=1)
+    norm_sr = np.linalg.norm(sr_f, axis=1)
+
+    denom = norm_hr * norm_sr
+    valid2 = denom > 1e-12
+
+    if valid2.sum() == 0:
+        return np.nan
+
+    cos = dot[valid2] / denom[valid2]
+    cos = np.clip(cos, -1.0, 1.0)
+
+    angle = np.degrees(np.arccos(cos))
+
+    return float(np.mean(angle))
+
+
+def calc_ssim_simple(hr, sr):
+    hr, sr = crop_common_np(hr, sr)
+
+    channels = hr.shape[-1]
+
+    try:
+        from skimage.metrics import structural_similarity as ssim
+
+        vals = []
+
+        for c in range(channels):
+            hrc = hr[..., c]
+            src = sr[..., c]
+
+            valid = np.isfinite(hrc) & np.isfinite(src)
+
+            if valid.sum() == 0:
+                continue
+
+            hrc2 = np.where(valid, hrc, 0.0)
+            src2 = np.where(valid, src, 0.0)
+
+            data_range = np.percentile(hrc[valid], 99.5) - np.percentile(hrc[valid], 0.5)
+
+            if not np.isfinite(data_range) or data_range <= 1e-8:
+                data_range = np.max(hrc[valid]) - np.min(hrc[valid])
+
+            if not np.isfinite(data_range) or data_range <= 1e-8:
+                data_range = 1.0
+
+            vals.append(ssim(hrc2, src2, data_range=data_range))
+
+        if len(vals) == 0:
+            return np.nan
+
+        return float(np.mean(vals))
+
+    except Exception:
+        vals = []
+
+        for c in range(channels):
+            x = hr[..., c].astype(np.float32)
+            y = sr[..., c].astype(np.float32)
+
+            valid = np.isfinite(x) & np.isfinite(y)
+
+            if valid.sum() == 0:
+                continue
+
+            x = x[valid]
+            y = y[valid]
+
+            mu_x = x.mean()
+            mu_y = y.mean()
+
+            var_x = x.var()
+            var_y = y.var()
+
+            cov = ((x - mu_x) * (y - mu_y)).mean()
+
+            c1 = 0.01 ** 2
+            c2 = 0.03 ** 2
+
+            val = ((2 * mu_x * mu_y + c1) * (2 * cov + c2)) / (
+                (mu_x ** 2 + mu_y ** 2 + c1) *
+                (var_x + var_y + c2)
+            )
+
+            vals.append(val)
+
+        if len(vals) == 0:
+            return np.nan
+
+        return float(np.mean(vals))
+
+
+def calc_scc(hr, sr):
+    hr, sr = crop_common_np(hr, sr)
+
+    vals = []
+
+    for c in range(hr.shape[-1]):
+        x = hr[..., c].reshape(-1)
+        y = sr[..., c].reshape(-1)
+
+        valid = np.isfinite(x) & np.isfinite(y)
+
+        if valid.sum() < 2:
+            continue
+
+        x = x[valid]
+        y = y[valid]
+
+        if np.std(x) <= 1e-12 or np.std(y) <= 1e-12:
+            continue
+
+        corr = np.corrcoef(x, y)[0, 1]
+
+        if np.isfinite(corr):
+            vals.append(corr)
+
+    if len(vals) == 0:
+        return np.nan
+
+    return float(np.mean(vals))
+
+
+def calc_uqi(hr, sr):
+    hr, sr = crop_common_np(hr, sr)
+
+    vals = []
+
+    for c in range(hr.shape[-1]):
+        x = hr[..., c].reshape(-1).astype(np.float64)
+        y = sr[..., c].reshape(-1).astype(np.float64)
+
+        valid = np.isfinite(x) & np.isfinite(y)
+
+        if valid.sum() < 2:
+            continue
+
+        x = x[valid]
+        y = y[valid]
+
+        mu_x = np.mean(x)
+        mu_y = np.mean(y)
+
+        var_x = np.var(x)
+        var_y = np.var(y)
+
+        cov_xy = np.mean((x - mu_x) * (y - mu_y))
+
+        denom = (var_x + var_y) * (mu_x ** 2 + mu_y ** 2)
+
+        if abs(denom) <= 1e-12:
+            continue
+
+        uqi = (4.0 * cov_xy * mu_x * mu_y) / denom
+
+        if np.isfinite(uqi):
+            vals.append(uqi)
+
+    if len(vals) == 0:
+        return np.nan
+
+    return float(np.mean(vals))
+
+
+def calc_ergas(hr, sr, scale):
+    hr, sr = crop_common_np(hr, sr)
+
+    vals = []
+
+    for c in range(hr.shape[-1]):
+        hrc = hr[..., c]
+        src = sr[..., c]
+
+        valid = np.isfinite(hrc) & np.isfinite(src)
+
+        if valid.sum() == 0:
+            continue
+
+        rmse_c = np.sqrt(np.mean((hrc[valid] - src[valid]) ** 2))
+        mean_c = np.mean(hrc[valid])
+
+        if abs(mean_c) <= 1e-12:
+            continue
+
+        vals.append((rmse_c / mean_c) ** 2)
+
+    if len(vals) == 0:
+        return np.nan
+
+    ergas = 100.0 / float(scale) * np.sqrt(np.mean(vals))
+
+    return float(ergas)
+
+
+def calc_rase(hr, sr):
+    hr, sr = crop_common_np(hr, sr)
+
+    rmse_vals = []
+    mean_vals = []
+
+    for c in range(hr.shape[-1]):
+        hrc = hr[..., c]
+        src = sr[..., c]
+
+        valid = np.isfinite(hrc) & np.isfinite(src)
+
+        if valid.sum() == 0:
+            continue
+
+        rmse_c = np.sqrt(np.mean((hrc[valid] - src[valid]) ** 2))
+        mean_c = np.mean(hrc[valid])
+
+        if np.isfinite(rmse_c) and np.isfinite(mean_c):
+            rmse_vals.append(rmse_c)
+            mean_vals.append(mean_c)
+
+    if len(rmse_vals) == 0:
+        return np.nan
+
+    mean_ref = np.mean(mean_vals)
+
+    if abs(mean_ref) <= 1e-12:
+        return np.nan
+
+    rase = 100.0 / mean_ref * np.sqrt(np.mean(np.array(rmse_vals) ** 2))
+
+    return float(rase)
+
+
+def vegetation_indices_np(cube):
+    green = cube[..., 1]
+    red = cube[..., 2]
+    rededge = cube[..., 3]
+    nir = cube[..., 4]
+
+    ndvi = (nir - red) / (nir + red + 1e-6)
+    gndvi = (nir - green) / (nir + green + 1e-6)
+    ndre = (nir - rededge) / (nir + rededge + 1e-6)
+
+    return ndvi, gndvi, ndre
+
+
+def calc_vi_errors(hr, sr):
+    hr, sr = crop_common_np(hr, sr)
+
+    if hr.shape[-1] < 5 or sr.shape[-1] < 5:
+        return {
+            "NDVI_MAE": np.nan,
+            "GNDVI_MAE": np.nan,
+            "NDRE_MAE": np.nan,
+        }
+
+    hr_ndvi, hr_gndvi, hr_ndre = vegetation_indices_np(hr)
+    sr_ndvi, sr_gndvi, sr_ndre = vegetation_indices_np(sr)
+
+    return {
+        "NDVI_MAE": float(np.nanmean(np.abs(hr_ndvi - sr_ndvi))),
+        "GNDVI_MAE": float(np.nanmean(np.abs(hr_gndvi - sr_gndvi))),
+        "NDRE_MAE": float(np.nanmean(np.abs(hr_ndre - sr_ndre))),
+    }
+
+
+def calc_bandwise_rmse(hr, sr):
+    hr, sr = crop_common_np(hr, sr)
+
+    result = {}
+
+    for i, name in enumerate(BAND_NAMES):
+        if i >= hr.shape[-1]:
+            result[f"RMSE_{name}"] = np.nan
+            continue
+
+        hrc = hr[..., i]
+        src = sr[..., i]
+
+        valid = np.isfinite(hrc) & np.isfinite(src)
+
+        if valid.sum() == 0:
+            result[f"RMSE_{name}"] = np.nan
+        else:
+            diff = hrc[valid] - src[valid]
+            result[f"RMSE_{name}"] = float(np.sqrt(np.mean(diff ** 2)))
+
+    return result
+
+
+def calc_bandwise_mae(hr, sr):
+    hr, sr = crop_common_np(hr, sr)
+
+    result = {}
+
+    for i, name in enumerate(BAND_NAMES):
+        if i >= hr.shape[-1]:
+            result[f"MAE_{name}"] = np.nan
+            continue
+
+        hrc = hr[..., i]
+        src = sr[..., i]
+
+        valid = np.isfinite(hrc) & np.isfinite(src)
+
+        if valid.sum() == 0:
+            result[f"MAE_{name}"] = np.nan
+        else:
+            result[f"MAE_{name}"] = float(np.mean(np.abs(hrc[valid] - src[valid])))
+
+    return result
+
+
+def calc_bandwise_psnr(hr, sr):
+    hr, sr = crop_common_np(hr, sr)
+
+    result = {}
+
+    for i, name in enumerate(BAND_NAMES):
+        if i >= hr.shape[-1]:
+            result[f"PSNR_{name}"] = np.nan
+            continue
+
+        hrc = hr[..., i]
+        src = sr[..., i]
+
+        valid = np.isfinite(hrc) & np.isfinite(src)
+
+        if valid.sum() == 0:
+            result[f"PSNR_{name}"] = np.nan
+            continue
+
+        mse = np.mean((hrc[valid] - src[valid]) ** 2)
+
+        if mse <= 1e-12:
+            result[f"PSNR_{name}"] = 99.0
+            continue
+
+        max_val = np.percentile(hrc[valid], 99.5)
+
+        if not np.isfinite(max_val) or max_val <= 0:
+            max_val = 1.0
+
+        result[f"PSNR_{name}"] = float(20 * math.log10(max_val / math.sqrt(mse)))
+
+    return result
+
+
+def calc_bandwise_ssim(hr, sr):
+    hr, sr = crop_common_np(hr, sr)
+
+    result = {}
+
+    try:
+        from skimage.metrics import structural_similarity as ssim
+
+        for i, name in enumerate(BAND_NAMES):
+            if i >= hr.shape[-1]:
+                result[f"SSIM_{name}"] = np.nan
+                continue
+
+            hrc = hr[..., i]
+            src = sr[..., i]
+
+            valid = np.isfinite(hrc) & np.isfinite(src)
+
+            if valid.sum() == 0:
+                result[f"SSIM_{name}"] = np.nan
+                continue
+
+            hrc2 = np.where(valid, hrc, 0.0)
+            src2 = np.where(valid, src, 0.0)
+
+            data_range = np.percentile(hrc[valid], 99.5) - np.percentile(hrc[valid], 0.5)
+
+            if not np.isfinite(data_range) or data_range <= 1e-8:
+                data_range = np.max(hrc[valid]) - np.min(hrc[valid])
+
+            if not np.isfinite(data_range) or data_range <= 1e-8:
+                data_range = 1.0
+
+            result[f"SSIM_{name}"] = float(ssim(hrc2, src2, data_range=data_range))
+
+    except Exception:
+        for name in BAND_NAMES:
+            result[f"SSIM_{name}"] = np.nan
+
+    return result
+
+
+def calc_gradient_mae(hr, sr):
+    hr, sr = crop_common_np(hr, sr)
+    hr_m, sr_m, _, _ = mask_nodata_for_metrics(hr, sr)
+    vals = []
+    for axis in [0, 1]:
+        dhr = np.diff(hr_m, axis=axis)
+        dsr = np.diff(sr_m, axis=axis)
+        valid = np.isfinite(dhr) & np.isfinite(dsr)
+        if np.any(valid):
+            vals.append(float(np.mean(np.abs(dhr[valid] - dsr[valid]))))
+    return float(np.mean(vals)) if len(vals) > 0 else np.nan
+
+
+def calc_laplacian_mae(hr, sr):
+    hr, sr = crop_common_np(hr, sr)
+    hr_m, sr_m, _, _ = mask_nodata_for_metrics(hr, sr)
+    vals = []
+    for c in range(hr_m.shape[-1]):
+        hrc = np.nan_to_num(hr_m[..., c], nan=0.0).astype(np.float32)
+        src = np.nan_to_num(sr_m[..., c], nan=0.0).astype(np.float32)
+        lap_hr = cv2.Laplacian(hrc, cv2.CV_32F, ksize=3)
+        lap_sr = cv2.Laplacian(src, cv2.CV_32F, ksize=3)
+        valid = np.isfinite(hr_m[..., c]) & np.isfinite(sr_m[..., c])
+        if np.any(valid):
+            vals.append(float(np.mean(np.abs(lap_hr[valid] - lap_sr[valid]))))
+    return float(np.mean(vals)) if len(vals) > 0 else np.nan
+
+
+def calc_tenengrad_value(cube):
+    cube = cube.astype(np.float32)
+    valid = np.isfinite(cube) & (cube > NODATA_THRESHOLD)
+    if cube.ndim == 3:
+        valid_pix = np.any(valid, axis=-1)
+        safe = np.where(valid, cube, np.nan)
+        gray = np.nanmean(safe, axis=-1)
+    else:
+        valid_pix = valid
+        gray = cube
+    gray = np.nan_to_num(gray, nan=0.0).astype(np.float32)
+    gx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+    g2 = gx * gx + gy * gy
+    if np.any(valid_pix):
+        return float(np.mean(g2[valid_pix]))
+    return np.nan
+
+
+def calc_sharpness_metrics(hr, sr):
+    ten_hr = calc_tenengrad_value(hr)
+    ten_sr = calc_tenengrad_value(sr)
+    return {
+        "Gradient_MAE": calc_gradient_mae(hr, sr),
+        "Laplacian_MAE": calc_laplacian_mae(hr, sr),
+        "Tenengrad_HR": ten_hr,
+        "Tenengrad_SR": ten_sr,
+        "Tenengrad_diff": float(abs(ten_hr - ten_sr)) if np.isfinite(ten_hr) and np.isfinite(ten_sr) else np.nan,
+        "Tenengrad_ratio": float(ten_sr / ten_hr) if np.isfinite(ten_hr) and abs(ten_hr) > 1e-12 and np.isfinite(ten_sr) else np.nan,
+    }
+
+
+def calc_metrics(hr, sr, scale=None):
+    """
+    빠른 평가용 metric 계산.
+
+    변경 사항:
+    - 전체 평균 SSIM은 COMPUTE_GLOBAL_SSIM으로 제어
+    - Band-wise SSIM은 매우 느리므로 COMPUTE_BANDWISE_SSIM=False일 때 NaN으로 대체
+    - Sharpness metric은 COMPUTE_SHARPNESS_METRICS=False일 때 NaN으로 대체
+
+    기본적으로 논문 비교에 중요한 RMSE, MAE, PSNR, SSIM, SAM, ERGAS,
+    RASE, SCC, UQI, R2, NDVI/GNDVI/NDRE 오차, 밴드별 RMSE/MAE/PSNR은 유지합니다.
+    """
+    metrics = {
+        "MSE": calc_mse(hr, sr),
+        "RMSE": calc_rmse(hr, sr),
+        "MAE": calc_mae(hr, sr),
+        "PSNR": calc_psnr(hr, sr),
+        "SSIM": calc_ssim_simple(hr, sr) if COMPUTE_GLOBAL_SSIM else np.nan,
+        "SAM_degree": calc_sam_np(hr, sr),
+        "SCC": calc_scc(hr, sr),
+        "UQI": calc_uqi(hr, sr),
+        "R2": calc_r2(hr, sr),
+        "RASE": calc_rase(hr, sr),
+    }
+
+    if scale is not None:
+        metrics["ERGAS"] = calc_ergas(hr, sr, scale)
+    else:
+        metrics["ERGAS"] = np.nan
+
+    if COMPUTE_SHARPNESS_METRICS:
+        metrics.update(calc_sharpness_metrics(hr, sr))
+    else:
+        metrics.update({
+            "Gradient_MAE": np.nan,
+            "Laplacian_MAE": np.nan,
+            "Tenengrad_HR": np.nan,
+            "Tenengrad_SR": np.nan,
+            "Tenengrad_diff": np.nan,
+            "Tenengrad_ratio": np.nan,
+        })
+
+    metrics.update(calc_bandwise_rmse(hr, sr))
+    metrics.update(calc_bandwise_mae(hr, sr))
+    metrics.update(calc_bandwise_psnr(hr, sr))
+
+    if COMPUTE_BANDWISE_SSIM:
+        metrics.update(calc_bandwise_ssim(hr, sr))
+    else:
+        for name in BAND_NAMES:
+            metrics[f"SSIM_{name}"] = np.nan
+
+    metrics.update(calc_vi_errors(hr, sr))
+
+    return metrics
+
+
+# ============================================================
+# 9. Preview / Diff map
+# ============================================================
+
+def get_ref_vmin_vmax(ref_img, p_low=2, p_high=98):
+    ref_img = ref_img.astype(np.float32)
+    valid = np.isfinite(ref_img) & (ref_img > NODATA_THRESHOLD)
+    if valid.sum() == 0:
+        return 0.0, 1.0
+    vmin = float(np.percentile(ref_img[valid], p_low))
+    vmax = float(np.percentile(ref_img[valid], p_high))
+    if not np.isfinite(vmin) or not np.isfinite(vmax) or vmax <= vmin:
+        vmin = float(np.nanmin(ref_img[valid]))
+        vmax = float(np.nanmax(ref_img[valid]))
+    if not np.isfinite(vmin) or not np.isfinite(vmax) or vmax <= vmin:
+        return 0.0, 1.0
+    return vmin, vmax
+
+
+def normalize_to_uint8(img, vmin=None, vmax=None):
+    img = img.astype(np.float32)
+    if vmin is None or vmax is None:
+        vmin, vmax = get_ref_vmin_vmax(img)
+    if not np.isfinite(vmin) or not np.isfinite(vmax) or vmax <= vmin:
+        return np.zeros(img.shape, dtype=np.uint8)
+    out = (img - vmin) / (vmax - vmin)
+    out = np.clip(out, 0, 1)
+    return (out * 255).astype(np.uint8)
+
+
+def cube_to_rgb(cube, ref_cube=None):
+    if ref_cube is None:
+        ref_cube = cube
+    channels = [2, 1, 0]
+    out_channels = []
+    for ch in channels:
+        vmin, vmax = get_ref_vmin_vmax(ref_cube[..., ch])
+        out_channels.append(normalize_to_uint8(cube[..., ch], vmin, vmax))
+    return np.stack(out_channels, axis=-1)
+
+
+def cube_to_false_color(cube, ref_cube=None):
+    if ref_cube is None:
+        ref_cube = cube
+    channels = [4, 2, 1]
+    out_channels = []
+    for ch in channels:
+        vmin, vmax = get_ref_vmin_vmax(ref_cube[..., ch])
+        out_channels.append(normalize_to_uint8(cube[..., ch], vmin, vmax))
+    return np.stack(out_channels, axis=-1)
+
+
+def add_label_rgb(img, text):
+    out = img.copy()
+    cv2.putText(out, text, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 0), 2, cv2.LINE_AA)
+    return out
+
+
+def find_best_zoom_crop(hr, crop_size=ZOOM_CROP_SIZE):
+    h, w = hr.shape[:2]
+    crop_size = int(min(crop_size, h, w))
+    if crop_size <= 0:
+        return 0, h, 0, w
+    valid = np.all(np.isfinite(hr), axis=-1) & np.all(hr > NODATA_THRESHOLD, axis=-1)
+    rgb = cube_to_rgb(hr, ref_cube=hr)
+    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY).astype(np.float32) / 255.0
+    gx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+    energy = np.sqrt(gx * gx + gy * gy)
+    step = max(8, crop_size // 8)
+    best_score = -1.0
+    best_yx = None
+    y_positions = list(range(0, max(h - crop_size + 1, 1), step))
+    x_positions = list(range(0, max(w - crop_size + 1, 1), step))
+    if len(y_positions) == 0 or y_positions[-1] != h - crop_size:
+        y_positions.append(max(0, h - crop_size))
+    if len(x_positions) == 0 or x_positions[-1] != w - crop_size:
+        x_positions.append(max(0, w - crop_size))
+    for y in y_positions:
+        for x in x_positions:
+            vratio = float(np.mean(valid[y:y+crop_size, x:x+crop_size]))
+            if vratio < ZOOM_MIN_VALID_RATIO:
+                continue
+            score = float(np.mean(energy[y:y+crop_size, x:x+crop_size]))
+            if score > best_score:
+                best_score = score
+                best_yx = (y, x)
+    if best_yx is None:
+        y = max(0, (h - crop_size) // 2)
+        x = max(0, (w - crop_size) // 2)
+    else:
+        y, x = best_yx
+    return y, y + crop_size, x, x + crop_size
+
+
+def compute_error_map(hr, sr):
+    hr, sr = crop_common_np(hr, sr)
+    hr_m, sr_m, _, _ = mask_nodata_for_metrics(hr, sr)
+    return np.nanmean(np.abs(hr_m - sr_m), axis=-1)
+
+
+def diff_to_heatmap(diff, vmin=0.0, vmax=None):
+    valid = np.isfinite(diff)
+    if vmax is None:
+        vmax = float(np.percentile(diff[valid], ERROR_MAP_PERCENTILE)) if np.any(valid) else 1.0
+    if (not np.isfinite(vmax)) or vmax <= vmin:
+        vmax = vmin + 1e-6
+    diff_u8 = normalize_to_uint8(np.nan_to_num(diff, nan=vmin), vmin=vmin, vmax=vmax)
+    heat = cv2.applyColorMap(diff_u8, cv2.COLORMAP_JET)
+    return cv2.cvtColor(heat, cv2.COLOR_BGR2RGB), vmax
+
+
+def compute_index_map(cube, index_name, eps=1e-6):
+    cube = np.asarray(cube, dtype=np.float32)
+    if cube.ndim != 3 or cube.shape[2] < 5:
+        return None
+    red = cube[..., 2]
+    rededge = cube[..., 3]
+    nir = cube[..., 4]
+    if index_name.lower() == 'ndvi':
+        denom = np.maximum(nir + red, eps)
+        return (nir - red) / denom
+    if index_name.lower() == 'ndre':
+        denom = np.maximum(nir + rededge, eps)
+        return (nir - rededge) / denom
+    return None
+
+
+def save_error_maps(scene_id, scale, mode, method, hr, sr):
+    if not SAVE_ERROR_MAPS:
+        return {"ErrorMap_Mean_path": "", "ErrorMap_NDVI_path": "", "ErrorMap_NDRE_path": "", "ErrorMap_Panel_path": ""}
+
+    out_dir = OUTPUT_DIR / 'sr_error_maps'
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    hr, sr = crop_common_np(hr, sr)
+    hr_m, sr_m, _, _ = mask_nodata_for_metrics(hr, sr)
+
+    mean_abs_err = np.nanmean(np.abs(hr_m - sr_m), axis=-1)
+    mean_heat, mean_vmax = diff_to_heatmap(mean_abs_err, vmin=0.0, vmax=None)
+    mean_heat = add_label_rgb(mean_heat, 'Mean abs error')
+    mean_path = out_dir / f"{scene_id}_x{scale}_{mode}_{method}_mean_abs_error_map.png"
+    cv2.imwrite(str(mean_path), cv2.cvtColor(mean_heat, cv2.COLOR_RGB2BGR))
+
+    ndvi_path_str = ''
+    ndre_path_str = ''
+    ndvi_heat = None
+    ndre_heat = None
+    ndvi_hr = compute_index_map(hr_m, 'ndvi')
+    ndvi_sr = compute_index_map(sr_m, 'ndvi')
+    if ndvi_hr is not None and ndvi_sr is not None:
+        ndvi_err = np.abs(ndvi_hr - ndvi_sr)
+        ndvi_heat, _ = diff_to_heatmap(ndvi_err, vmin=0.0, vmax=None)
+        ndvi_heat = add_label_rgb(ndvi_heat, 'NDVI error')
+        ndvi_path = out_dir / f"{scene_id}_x{scale}_{mode}_{method}_NDVI_error_map.png"
+        cv2.imwrite(str(ndvi_path), cv2.cvtColor(ndvi_heat, cv2.COLOR_RGB2BGR))
+        ndvi_path_str = str(ndvi_path)
+
+    ndre_hr = compute_index_map(hr_m, 'ndre')
+    ndre_sr = compute_index_map(sr_m, 'ndre')
+    if ndre_hr is not None and ndre_sr is not None:
+        ndre_err = np.abs(ndre_hr - ndre_sr)
+        ndre_heat, _ = diff_to_heatmap(ndre_err, vmin=0.0, vmax=None)
+        ndre_heat = add_label_rgb(ndre_heat, 'NDRE error')
+        ndre_path = out_dir / f"{scene_id}_x{scale}_{mode}_{method}_NDRE_error_map.png"
+        cv2.imwrite(str(ndre_path), cv2.cvtColor(ndre_heat, cv2.COLOR_RGB2BGR))
+        ndre_path_str = str(ndre_path)
+
+    if SAVE_BAND_ERROR_MAPS:
+        for bi, band_name in enumerate(BAND_NAMES[:hr_m.shape[2]]):
+            band_err = np.abs(hr_m[..., bi] - sr_m[..., bi])
+            band_heat, _ = diff_to_heatmap(band_err, vmin=0.0, vmax=None)
+            band_heat = add_label_rgb(band_heat, f'{band_name} error')
+            band_path = out_dir / f"{scene_id}_x{scale}_{mode}_{method}_{band_name}_error_map.png"
+            cv2.imwrite(str(band_path), cv2.cvtColor(band_heat, cv2.COLOR_RGB2BGR))
+
+    panel_path_str = ''
+    if SAVE_ERROR_MAP_PANEL:
+        hr_rgb = add_label_rgb(cube_to_rgb(hr, ref_cube=hr), 'HR')
+        sr_rgb = add_label_rgb(cube_to_rgb(sr, ref_cube=hr), 'SR')
+        base_h, base_w = hr_rgb.shape[:2]
+        panel_imgs = [hr_rgb, sr_rgb, mean_heat]
+        if ndvi_heat is None:
+            ndvi_heat = mean_heat.copy()
+            ndvi_heat = add_label_rgb(ndvi_heat, 'NDVI error (n/a)')
+        panel_imgs.append(ndvi_heat)
+        resized = []
+        for img in panel_imgs:
+            if img.shape[0] != base_h or img.shape[1] != base_w:
+                img = cv2.resize(img, (base_w, base_h), interpolation=cv2.INTER_NEAREST)
+            resized.append(img)
+        top = np.concatenate(resized[:2], axis=1)
+        bottom = np.concatenate(resized[2:4], axis=1)
+        panel = np.concatenate([top, bottom], axis=0)
+        panel_path = out_dir / f"{scene_id}_x{scale}_{mode}_{method}_error_map_panel.png"
+        cv2.imwrite(str(panel_path), cv2.cvtColor(panel, cv2.COLOR_RGB2BGR))
+        panel_path_str = str(panel_path)
+
+    return {
+        'ErrorMap_Mean_path': str(mean_path),
+        'ErrorMap_NDVI_path': ndvi_path_str,
+        'ErrorMap_NDRE_path': ndre_path_str,
+        'ErrorMap_Panel_path': panel_path_str,
+    }
+
+
+def save_preview(scene_id, scale, mode, method, hr, lr, sr):
+    """
+    Preview 저장 함수.
+
+    SAVE_SEPARATE_PREVIEW = True일 때:
+      sr_preview/
+        RGB/
+          *_HR_RGB.png
+          *_LRup_RGB.png
+          *_SR_RGB.png
+        FalseColor/
+          *_HR_FalseColor.png
+          *_LRup_FalseColor.png
+          *_SR_FalseColor.png
+
+    SAVE_SEPARATE_PREVIEW = True일 때:
+      기존 방식처럼 HR|LR-up|SR을 가로로 붙인 비교 이미지를 저장.
+    """
+    if not SAVE_PREVIEW:
+        return "", "", ""
+
+    out_dir = OUTPUT_DIR / "sr_preview"
+    lr_vis = cv2.resize(
+        lr.astype(np.float32),
+        (hr.shape[1], hr.shape[0]),
+        interpolation=cv2.INTER_CUBIC
+    )
+
+    hr_rgb = add_label_rgb(cube_to_rgb(hr, ref_cube=hr), "HR")
+    lr_rgb = add_label_rgb(cube_to_rgb(lr_vis, ref_cube=hr), "LR-up")
+    sr_rgb = add_label_rgb(cube_to_rgb(sr, ref_cube=hr), "SR")
+
+    hr_fc = add_label_rgb(cube_to_false_color(hr, ref_cube=hr), "HR")
+    lr_fc = add_label_rgb(cube_to_false_color(lr_vis, ref_cube=hr), "LR-up")
+    sr_fc = add_label_rgb(cube_to_false_color(sr, ref_cube=hr), "SR")
+
+    if SAVE_SEPARATE_PREVIEW:
+        rgb_dir = out_dir / "RGB"
+        fc_dir = out_dir / "FalseColor"
+        rgb_dir.mkdir(parents=True, exist_ok=True)
+        fc_dir.mkdir(parents=True, exist_ok=True)
+
+        hr_rgb_path = rgb_dir / f"{scene_id}_x{scale}_{mode}_{method}_HR_RGB.png"
+        lr_rgb_path = rgb_dir / f"{scene_id}_x{scale}_{mode}_{method}_LRup_RGB.png"
+        sr_rgb_path = rgb_dir / f"{scene_id}_x{scale}_{mode}_{method}_SR_RGB.png"
+
+        cv2.imwrite(str(hr_rgb_path), cv2.cvtColor(hr_rgb, cv2.COLOR_RGB2BGR))
+        cv2.imwrite(str(lr_rgb_path), cv2.cvtColor(lr_rgb, cv2.COLOR_RGB2BGR))
+        cv2.imwrite(str(sr_rgb_path), cv2.cvtColor(sr_rgb, cv2.COLOR_RGB2BGR))
+
+        hr_fc_path = fc_dir / f"{scene_id}_x{scale}_{mode}_{method}_HR_FalseColor.png"
+        lr_fc_path = fc_dir / f"{scene_id}_x{scale}_{mode}_{method}_LRup_FalseColor.png"
+        sr_fc_path = fc_dir / f"{scene_id}_x{scale}_{mode}_{method}_SR_FalseColor.png"
+
+        cv2.imwrite(str(hr_fc_path), cv2.cvtColor(hr_fc, cv2.COLOR_RGB2BGR))
+        cv2.imwrite(str(lr_fc_path), cv2.cvtColor(lr_fc, cv2.COLOR_RGB2BGR))
+        cv2.imwrite(str(sr_fc_path), cv2.cvtColor(sr_fc, cv2.COLOR_RGB2BGR))
+
+        # CSV에는 대표 경로로 SR preview를 기록
+        rgb_preview_path = str(sr_rgb_path)
+        false_preview_path = str(sr_fc_path)
+
+    else:
+        combined_rgb = np.concatenate([hr_rgb, lr_rgb, sr_rgb], axis=1)
+        rgb_path = out_dir / f"{scene_id}_x{scale}_{mode}_{method}_HR_LR_SR_RGB.png"
+        cv2.imwrite(str(rgb_path), cv2.cvtColor(combined_rgb, cv2.COLOR_RGB2BGR))
+
+        combined_fc = np.concatenate([hr_fc, lr_fc, sr_fc], axis=1)
+        fc_path = out_dir / f"{scene_id}_x{scale}_{mode}_{method}_HR_LR_SR_FalseColor.png"
+        cv2.imwrite(str(fc_path), cv2.cvtColor(combined_fc, cv2.COLOR_RGB2BGR))
+
+        rgb_preview_path = str(rgb_path)
+        false_preview_path = str(fc_path)
+
+    zoom_rgb_path = save_zoom_preview(
+        scene_id, scale, mode, method, hr, lr, sr
+    ) if SAVE_ZOOM_PREVIEW else ""
+
+    return rgb_preview_path, false_preview_path, str(zoom_rgb_path)
+
+
+def save_zoom_preview(scene_id, scale, mode, method, hr, lr, sr):
+    """
+    Zoom crop 저장 함수.
+
+    SAVE_SEPARATE_PREVIEW = True일 때:
+      sr_preview_zoom/
+        *_HR_zoom_RGB.png
+        *_LRup_zoom_RGB.png
+        *_SR_zoom_RGB.png
+
+    SAVE_SEPARATE_PREVIEW = True일 때:
+      기존 방식처럼 HR crop | LR crop | SR crop을 가로로 붙여 저장.
+    """
+    out_dir = OUTPUT_DIR / "sr_preview_zoom"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    lr_vis = cv2.resize(
+        lr.astype(np.float32),
+        (hr.shape[1], hr.shape[0]),
+        interpolation=cv2.INTER_CUBIC
+    )
+
+    y1, y2, x1, x2 = find_best_zoom_crop(hr, crop_size=ZOOM_CROP_SIZE)
+
+    hr_crop = add_label_rgb(cube_to_rgb(hr[y1:y2, x1:x2], ref_cube=hr), "HR crop")
+    lr_crop = add_label_rgb(cube_to_rgb(lr_vis[y1:y2, x1:x2], ref_cube=hr), "LR-up crop")
+    sr_crop = add_label_rgb(cube_to_rgb(sr[y1:y2, x1:x2], ref_cube=hr), "SR crop")
+
+    if SAVE_SEPARATE_PREVIEW:
+        hr_zoom_path = out_dir / f"{scene_id}_x{scale}_{mode}_{method}_HR_zoom_RGB.png"
+        lr_zoom_path = out_dir / f"{scene_id}_x{scale}_{mode}_{method}_LRup_zoom_RGB.png"
+        sr_zoom_path = out_dir / f"{scene_id}_x{scale}_{mode}_{method}_SR_zoom_RGB.png"
+
+        cv2.imwrite(str(hr_zoom_path), cv2.cvtColor(hr_crop, cv2.COLOR_RGB2BGR))
+        cv2.imwrite(str(lr_zoom_path), cv2.cvtColor(lr_crop, cv2.COLOR_RGB2BGR))
+        cv2.imwrite(str(sr_zoom_path), cv2.cvtColor(sr_crop, cv2.COLOR_RGB2BGR))
+
+        return str(sr_zoom_path)
+
+    combined = np.concatenate([hr_crop, lr_crop, sr_crop], axis=1)
+    out_path = out_dir / f"{scene_id}_x{scale}_{mode}_{method}_zoom_RGB.png"
+    cv2.imwrite(str(out_path), cv2.cvtColor(combined, cv2.COLOR_RGB2BGR))
+
+    return str(out_path)
+
+def save_diff_map(scene_id, scale, mode, method, hr, sr):
+    if not SAVE_DIFF_MAP:
+        return ""
+    out_dir = OUTPUT_DIR / "sr_diff_map"
+    diff = compute_error_map(hr, sr)
+    valid = np.isfinite(diff)
+    vmax = float(np.percentile(diff[valid], ERROR_MAP_PERCENTILE)) if np.any(valid) else 1.0
+    full_heat, vmax = diff_to_heatmap(diff, vmin=0.0, vmax=vmax)
+    y1, y2, x1, x2 = find_best_zoom_crop(hr, crop_size=min(ZOOM_CROP_SIZE, hr.shape[0], hr.shape[1]))
+    crop_diff = diff[y1:y2, x1:x2]
+    crop_heat, _ = diff_to_heatmap(crop_diff, vmin=0.0, vmax=vmax)
+    full_with_box = full_heat.copy()
+    cv2.rectangle(full_with_box, (x1, y1), (x2 - 1, y2 - 1), (255, 255, 255), 2)
+    full_with_box = add_label_rgb(full_with_box, "Full error")
+    crop_heat = add_label_rgb(crop_heat, "Zoom error")
+    if crop_heat.shape[0] != full_with_box.shape[0]:
+        scale_h = full_with_box.shape[0] / max(crop_heat.shape[0], 1)
+        crop_heat = cv2.resize(crop_heat, (int(crop_heat.shape[1] * scale_h), full_with_box.shape[0]), interpolation=cv2.INTER_NEAREST)
+    combined = np.concatenate([full_with_box, crop_heat], axis=1)
+    out_path = out_dir / f"{scene_id}_x{scale}_{mode}_{method}_diff_same_scale.png"
+    cv2.imwrite(str(out_path), cv2.cvtColor(combined, cv2.COLOR_RGB2BGR))
+    return str(out_path)
+
+
+# ============================================================
+# 10. Bicubic / Inference
+# ============================================================
+
+def bicubic_sr(lr, target_shape):
+    h, w = target_shape[:2]
+
+    # Always remove nodata/background before bicubic interpolation.
+    # If -10000 nodata is resized directly, extreme artifacts can dominate
+    # RMSE/ERGAS, especially for bicubic baselines.
+    lr_valid_mask = make_valid_mask_np(lr)
+    lr = clean_nodata_to_zero(lr, lr_valid_mask)
+    lr = np.nan_to_num(lr.astype(np.float32), nan=0.0, posinf=1.5, neginf=0.0)
+
+    sr = cv2.resize(
+        lr.astype(np.float32),
+        (w, h),
+        interpolation=cv2.INTER_CUBIC
+    )
+
+    if sr.ndim == 2:
+        sr = sr[..., None]
+
+    sr = np.nan_to_num(sr.astype(np.float32), nan=0.0, posinf=1.5, neginf=0.0)
+
+    return sr.astype(np.float32)
+
+
+@torch.no_grad()
+def infer_full_image(model, lr_cube, scale, norm_factor, channels=5, band_index=None, tile_lr_size=None, tile_overlap=None):
+    model.eval()
+
+    lr_norm_full = normalize_cube(lr_cube, norm_factor)
+
+    if channels == 5:
+        lr_norm = lr_norm_full
+    elif channels == 1:
+        lr_norm = lr_norm_full[..., band_index:band_index + 1]
+    else:
+        raise ValueError(f"Unsupported channels: {channels}")
+
+    h_lr, w_lr = lr_norm.shape[:2]
+
+    h_sr = h_lr * scale
+    w_sr = w_lr * scale
+
+    output = np.zeros((h_sr, w_sr, channels), dtype=np.float32)
+    weight = np.zeros((h_sr, w_sr, channels), dtype=np.float32)
+
+    if tile_lr_size is None:
+        tile_lr_size = TILE_LR_SIZE
+    if tile_overlap is None:
+        tile_overlap = TILE_OVERLAP
+
+    tile_lr_size = int(max(8, tile_lr_size))
+    tile_overlap = int(max(0, min(tile_overlap, tile_lr_size - 1)))
+
+    step = tile_lr_size - tile_overlap
+
+    if step <= 0:
+        step = tile_lr_size
+
+    y_list = list(range(0, h_lr, step))
+    x_list = list(range(0, w_lr, step))
+
+    for y in y_list:
+        for x in x_list:
+            y2 = min(y + tile_lr_size, h_lr)
+            x2 = min(x + tile_lr_size, w_lr)
+
+            y1 = max(0, y2 - tile_lr_size)
+            x1 = max(0, x2 - tile_lr_size)
+
+            tile = lr_norm[y1:y2, x1:x2, :]
+
+            inp = np_to_tensor(tile).unsqueeze(0).to(DEVICE)
+
+            pred = model(inp)[0]
+            pred_np = tensor_to_np(pred)
+
+            pred_np = np.nan_to_num(pred_np, nan=0.0, posinf=1.5, neginf=0.0)
+
+            sy1 = y1 * scale
+            sx1 = x1 * scale
+            sy2 = sy1 + pred_np.shape[0]
+            sx2 = sx1 + pred_np.shape[1]
+
+            output[sy1:sy2, sx1:sx2, :] += pred_np
+            weight[sy1:sy2, sx1:sx2, :] += 1.0
+
+    output = output / np.maximum(weight, 1e-6)
+    output = np.nan_to_num(output, nan=0.0, posinf=1.5, neginf=0.0)
+
+    output = denormalize_cube(output, norm_factor)
+    output = np.nan_to_num(output, nan=0.0, posinf=0.0, neginf=0.0)
+
+    return output.astype(np.float32)
 
 
 # ============================================================
@@ -2526,11 +3970,13 @@ def standard_sr_loss(sr, hr, mask=None):
 # ============================================================
 
 def get_checkpoint_name(mode, method, scale, band_name=None):
+    case_method = get_case_method_name(method)
+
     if mode == "joint5ch":
-        return f"{mode}_{method}_x{scale}_best.pth"
+        return f"{mode}_{case_method}_x{scale}_best.pth"
 
     if mode == "bandwise":
-        return f"{mode}_{method}_{band_name}_x{scale}_best.pth"
+        return f"{mode}_{case_method}_{band_name}_x{scale}_best.pth"
 
     raise ValueError(f"Unsupported mode: {mode}")
 
@@ -2540,7 +3986,8 @@ def get_checkpoint_path(mode, method, scale, band_name=None):
     기존 훈련 모델은 CHECKPOINT_DIR에서 불러옵니다.
     새 NDVI/평가 결과는 OUTPUT_DIR에 저장하므로 기존 metrics를 덮어쓰지 않습니다.
     """
-    return CHECKPOINT_DIR / get_checkpoint_name(
+    checkpoint_root = CHECKPOINT_DIR if CURRENT_LOSS_PROFILE_ID == DEFAULT_LOSS_PROFILE_ID else OUTPUT_DIR / "sr_checkpoints"
+    return checkpoint_root / get_checkpoint_name(
         mode=mode,
         method=method,
         scale=scale,
@@ -2573,6 +4020,45 @@ def load_trained_model_from_checkpoint(method, scale, mode="joint5ch", channels=
     return model
 
 
+def load_existing_metric_csv(mode, method, scale):
+    case_method = get_case_method_name(method)
+    csv_path = OUTPUT_DIR / "sr_logs" / f"metrics_{mode}_{case_method}_x{scale}.csv"
+    if not csv_path.exists():
+        return []
+    try:
+        df = pd.read_csv(csv_path)
+        rows = df.to_dict("records")
+        print(f"[INFO] Loaded existing metrics and skipped evaluation: {csv_path} ({len(rows)} rows)")
+        return rows
+    except Exception as e:
+        print(f"[WARN] Failed to load existing metric CSV: {csv_path} | {e}")
+        return []
+
+
+def collect_existing_metric_rows():
+    log_dir = OUTPUT_DIR / "sr_logs"
+    rows = []
+    if not log_dir.exists():
+        return rows
+    for csv_path in sorted(log_dir.glob("metrics_*_x*.csv")):
+        if csv_path.name.startswith("metrics_all_methods"):
+            continue
+        try:
+            df = pd.read_csv(csv_path)
+            if not df.empty:
+                rows.extend(df.to_dict("records"))
+                print(f"[INFO] Collected existing metric file: {csv_path.name} ({len(df)} rows)")
+        except Exception as e:
+            print(f"[WARN] Failed to read metric file {csv_path}: {e}")
+    return rows
+
+
+def should_skip_eval(mode, method, scale):
+    case_method = get_case_method_name(method)
+    csv_path = OUTPUT_DIR / "sr_logs" / f"metrics_{mode}_{case_method}_x{scale}.csv"
+    return bool(SKIP_EVAL_IF_METRICS_EXISTS and csv_path.exists())
+
+
 def train_standard_model(
     method,
     scale,
@@ -2583,8 +4069,13 @@ def train_standard_model(
     band_index=None,
     band_name=None,
 ):
+    case_method = get_case_method_name(method)
+    loss_profile_id = CURRENT_LOSS_PROFILE_ID
+    loss_profile_label = get_loss_profile_label()
+
     print("\n====================================")
-    print(f"Train {mode} {method} x{scale}")
+    print(f"Train {mode} {case_method} x{scale}")
+    print(f"Loss profile: {loss_profile_label}")
     if mode == "bandwise":
         print(f"Band: {band_name}")
     print("====================================")
@@ -2629,6 +4120,7 @@ def train_standard_model(
 
     else:
         print("[INFO] Train mode: scratch")
+    print(f"[INFO] Loss profile: {loss_profile_id} ({loss_profile_label})")
 
     train_dataset = SRPatchDataset(
         records=train_records,
@@ -2644,7 +4136,7 @@ def train_standard_model(
         scale=scale,
         channels=channels,
         band_index=band_index,
-        patches_per_epoch=max(len(val_records) * VAL_PATCHES_PER_SCENE, 1),
+        patches_per_epoch=len(val_records),
         train=False
     )
 
@@ -2766,9 +4258,12 @@ def train_standard_model(
         history.append({
             "epoch": epoch,
             "mode": mode,
-            "method": method,
+            "method": case_method,
+            "base_method": method,
             "scale": scale,
             "band": band_name if band_name is not None else "all",
+            "loss_profile": loss_profile_id,
+            "loss_profile_label": loss_profile_label,
             "train_loss": train_loss,
             "val_loss": val_loss,
             "lr": optimizer.param_groups[0]["lr"],
@@ -2784,7 +4279,7 @@ def train_standard_model(
         })
 
         print(
-            f"[{mode} {method} x{scale}] "
+            f"[{mode} {case_method} x{scale}] "
             f"Epoch {epoch:03d}/{EPOCHS} | "
             f"Train={train_loss:.6f} | "
             f"Val={val_loss:.6f} | "
@@ -2801,8 +4296,11 @@ def train_standard_model(
                 torch.save({
                     "mode": mode,
                     "method": method,
+                    "case_method": case_method,
                     "scale": scale,
                     "channels": channels,
+                    "loss_profile": loss_profile_id,
+                    "loss_profile_label": loss_profile_label,
                     "band_index": band_index,
                     "band_name": band_name,
                     "model_state_dict": model.state_dict(),
@@ -2818,19 +4316,27 @@ def train_standard_model(
 
         if EARLY_STOPPING and epochs_no_improve >= PATIENCE:
             print(
-                f"[INFO] Early stopping triggered: {mode} {method} x{scale} "
+                f"[INFO] Early stopping triggered: {mode} {case_method} x{scale} "
                 f"band={band_name if band_name is not None else 'all'} | "
                 f"best_val={best_val:.6f} | patience={PATIENCE}"
             )
             break
 
     if mode == "joint5ch":
-        history_name = f"train_history_{mode}_{method}_x{scale}.csv"
+        history_name = f"train_history_{mode}_{case_method}_x{scale}.csv"
     else:
-        history_name = f"train_history_{mode}_{method}_{band_name}_x{scale}.csv"
+        history_name = f"train_history_{mode}_{case_method}_{band_name}_x{scale}.csv"
 
     history_path = OUTPUT_DIR / "sr_logs" / history_name
     write_dict_csv(history_path, history)
+    save_train_loss_plot(
+        history=history,
+        mode=mode,
+        case_method=case_method,
+        scale=scale,
+        band_name=band_name,
+        is_esrgan=False,
+    )
 
     if SAVE_CHECKPOINT and ckpt_path.exists():
         checkpoint = torch.load(ckpt_path, map_location=DEVICE)
@@ -2839,7 +4345,7 @@ def train_standard_model(
     total_train_time_sec = time.perf_counter() - train_start_total
 
     print("\n====================================")
-    print(f"Training time summary: {mode} {method} x{scale}")
+    print(f"Training time summary: {mode} {case_method} x{scale}")
     if mode == "bandwise":
         print(f"Band: {band_name}")
     print(f"Total training time: {format_seconds(total_train_time_sec)}")
@@ -2858,9 +4364,13 @@ def train_esrgan(
     band_name=None,
 ):
     method = "esrgan"
+    case_method = get_case_method_name(method)
+    loss_profile_id = CURRENT_LOSS_PROFILE_ID
+    loss_profile_label = get_loss_profile_label()
 
     print("\n====================================")
-    print(f"Train {mode} ESRGAN x{scale}")
+    print(f"Train {mode} {case_method} x{scale}")
+    print(f"Loss profile: {loss_profile_label}")
     if mode == "bandwise":
         print(f"Band: {band_name}")
     print("====================================")
@@ -2934,7 +4444,7 @@ def train_esrgan(
         scale=scale,
         channels=channels,
         band_index=band_index,
-        patches_per_epoch=max(len(val_records) * VAL_PATCHES_PER_SCENE, 1),
+        patches_per_epoch=len(val_records),
         train=False
     )
 
@@ -3014,32 +4524,31 @@ def train_esrgan(
             with torch.cuda.amp.autocast(enabled=amp_enabled):
                 sr_patch = generator(lr_patch)
 
-                l1 = masked_l1_loss(sr_patch, hr_patch, mask_patch)
+                if CURRENT_LOSS_PROFILE_ID == DEFAULT_LOSS_PROFILE_ID:
+                    l1 = masked_l1_loss(sr_patch, hr_patch, mask_patch)
 
-                if channels == 5:
-                    sam = sam_loss(sr_patch, hr_patch, mask_patch)
-                    vi = vi_loss(sr_patch, hr_patch, mask_patch)
+                    if channels == 5:
+                        sam = sam_loss(sr_patch, hr_patch, mask_patch)
+                        vi = vi_loss(sr_patch, hr_patch, mask_patch)
+                    else:
+                        sam = torch.tensor(0.0, device=DEVICE)
+                        vi = torch.tensor(0.0, device=DEVICE)
+
+                    content_loss = (
+                        ESRGAN_L1_WEIGHT * l1 +
+                        ESRGAN_SAM_WEIGHT * sam +
+                        ESRGAN_VI_WEIGHT * vi
+                    )
                 else:
-                    sam = torch.tensor(0.0, device=DEVICE)
-                    vi = torch.tensor(0.0, device=DEVICE)
+                    content_loss = standard_sr_loss(sr_patch, hr_patch, mask_patch)
 
                 if use_gan:
                     pred_fake_for_g = discriminator(sr_patch)
                     valid_label = torch.ones_like(pred_fake_for_g)
                     adv = bce(pred_fake_for_g, valid_label)
-
-                    g_loss = (
-                        ESRGAN_L1_WEIGHT * l1 +
-                        ESRGAN_SAM_WEIGHT * sam +
-                        ESRGAN_VI_WEIGHT * vi +
-                        ESRGAN_ADV_WEIGHT * adv
-                    )
+                    g_loss = content_loss + ESRGAN_ADV_WEIGHT * adv
                 else:
-                    g_loss = (
-                        ESRGAN_L1_WEIGHT * l1 +
-                        ESRGAN_SAM_WEIGHT * sam +
-                        ESRGAN_VI_WEIGHT * vi
-                    )
+                    g_loss = content_loss
 
             if not torch.isfinite(g_loss):
                 print("[WARN] Non-finite generator loss detected. Skip this batch.")
@@ -3120,9 +4629,12 @@ def train_esrgan(
         history.append({
             "epoch": epoch,
             "mode": mode,
-            "method": method,
+            "method": case_method,
+            "base_method": method,
             "scale": scale,
             "band": band_name if band_name is not None else "all",
+            "loss_profile": loss_profile_id,
+            "loss_profile_label": loss_profile_label,
             "g_loss": g_loss_mean,
             "d_loss": d_loss_mean,
             "val_loss": val_loss,
@@ -3141,7 +4653,7 @@ def train_esrgan(
         })
 
         print(
-            f"[{mode} ESRGAN x{scale}] "
+            f"[{mode} {case_method} x{scale}] "
             f"Epoch {epoch:03d}/{EPOCHS} | "
             f"G={g_loss_mean:.6f} | "
             f"D={d_loss_mean:.6f} | "
@@ -3160,8 +4672,11 @@ def train_esrgan(
                 torch.save({
                     "mode": mode,
                     "method": method,
+                    "case_method": case_method,
                     "scale": scale,
                     "channels": channels,
+                    "loss_profile": loss_profile_id,
+                    "loss_profile_label": loss_profile_label,
                     "band_index": band_index,
                     "band_name": band_name,
                     "generator_state_dict": generator.state_dict(),
@@ -3180,19 +4695,27 @@ def train_esrgan(
 
         if EARLY_STOPPING and epochs_no_improve >= PATIENCE:
             print(
-                f"[INFO] Early stopping triggered: {mode} ESRGAN x{scale} "
+                f"[INFO] Early stopping triggered: {mode} {case_method} x{scale} "
                 f"band={band_name if band_name is not None else 'all'} | "
                 f"best_val={best_val:.6f} | patience={PATIENCE}"
             )
             break
 
     if mode == "joint5ch":
-        history_name = f"train_history_{mode}_{method}_x{scale}.csv"
+        history_name = f"train_history_{mode}_{case_method}_x{scale}.csv"
     else:
-        history_name = f"train_history_{mode}_{method}_{band_name}_x{scale}.csv"
+        history_name = f"train_history_{mode}_{case_method}_{band_name}_x{scale}.csv"
 
     history_path = OUTPUT_DIR / "sr_logs" / history_name
     write_dict_csv(history_path, history)
+    save_train_loss_plot(
+        history=history,
+        mode=mode,
+        case_method=case_method,
+        scale=scale,
+        band_name=band_name,
+        is_esrgan=True,
+    )
 
     if SAVE_CHECKPOINT and ckpt_path.exists():
         checkpoint = torch.load(ckpt_path, map_location=DEVICE)
@@ -3201,7 +4724,7 @@ def train_esrgan(
     total_train_time_sec = time.perf_counter() - train_start_total
 
     print("\n====================================")
-    print(f"Training time summary: {mode} ESRGAN x{scale}")
+    print(f"Training time summary: {mode} {case_method} x{scale}")
     if mode == "bandwise":
         print(f"Band: {band_name}")
     print(f"Total training time: {format_seconds(total_train_time_sec)}")
@@ -3255,235 +4778,1174 @@ def train_bandwise_models(method, scale, train_records, val_records):
 
 
 # ============================================================
-# 13-1. Training loss plot only
+# 12. Evaluation
 # ============================================================
 
-def plot_training_loss_curves_from_history():
-    """
-    Train-only 후처리:
-    - sr_logs/train_history_*.csv 파일을 읽음
-    - 모델별 train loss 그래프만 저장
-    - 평가 metric 계산은 수행하지 않음
+def evaluate_joint5ch(method, scale, model, test_records):
+    case_method = get_case_method_name(method)
+    loss_profile_id = CURRENT_LOSS_PROFILE_ID
+    loss_profile_label = get_loss_profile_label()
 
-    저장 위치:
-      sr_logs/train_loss_plots/individual/
-      sr_logs/train_loss_plots/combined/
-      sr_logs/train_loss_plots/train_loss_plot_summary.csv
+    print("\n====================================")
+    print(f"Evaluate joint5ch {case_method} x{scale}")
+    print(f"Loss profile: {loss_profile_label}")
+    print("====================================")
+
+    mode = "joint5ch"
+
+    metric_rows = []
+    preview_count = 0
+
+    model_info = count_model_parameters(model)
+
+    for idx, record in enumerate(test_records):
+        scene_id = record["scene_id"]
+
+        try:
+            eval_start_time = time.perf_counter()
+
+            load_start_time = time.perf_counter()
+
+            hr_path = get_hr_path(record)
+            lr_path = get_lr_path(record, scale)
+
+            hr = load_npy(hr_path)
+            lr = load_npy(lr_path)
+
+            original_hr_shape = hr.shape
+            hr = align_hr_to_lr_scale(hr, lr, scale)
+
+            print(
+                f"[SHAPE] scene={scene_id} | mode={mode} | method={case_method} | x{scale} | "
+                f"Original_HR={original_hr_shape} | Aligned_HR={hr.shape} | LR={lr.shape} | "
+                f"Expected_SR=({lr.shape[0] * scale}, {lr.shape[1] * scale}, {lr.shape[2]})"
+            )
+
+            load_time_sec = time.perf_counter() - load_start_time
+
+            norm_factor = robust_norm_factor(hr)
+
+            infer_start_time = time.perf_counter()
+            infer_tile_size, infer_tile_overlap = get_infer_tile_settings(method)
+
+            if method == "bicubic":
+                sr = bicubic_sr(lr, hr.shape)
+            else:
+                infer_tile_size, infer_tile_overlap = get_infer_tile_settings(method)
+
+                sr = infer_full_image(
+                    model=model,
+                    lr_cube=lr,
+                    scale=scale,
+                    norm_factor=norm_factor,
+                    channels=5,
+                    tile_lr_size=infer_tile_size,
+                    tile_overlap=infer_tile_overlap
+                )
+
+                if sr.shape[0] != hr.shape[0] or sr.shape[1] != hr.shape[1]:
+                    sr = cv2.resize(
+                        sr,
+                        (hr.shape[1], hr.shape[0]),
+                        interpolation=cv2.INTER_CUBIC
+                    )
+
+                    if sr.ndim == 2:
+                        sr = sr[..., None]
+
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+
+            infer_time_sec = time.perf_counter() - infer_start_time
+
+            if np.isnan(sr).any() or np.isinf(sr).any():
+                print(f"[WARN] SR contains NaN/Inf: {scene_id}, {mode}, {method}, x{scale}")
+                sr = np.nan_to_num(sr, nan=0.0, posinf=0.0, neginf=0.0)
+
+            hr_metric, sr_metric, valid_metric_mask, valid_metric_ratio = mask_nodata_for_metrics(hr, sr)
+            metrics = calc_metrics(hr_metric, sr_metric, scale=scale)
+            metrics["valid_metric_ratio"] = valid_metric_ratio
+
+            save_start_time = time.perf_counter()
+
+            sr_path = ""
+
+            if SAVE_SR_NPY:
+                out_dir = OUTPUT_DIR / f"SR_x{scale}_{mode}_{case_method}_npy"
+                sr_out_path = out_dir / f"{scene_id}_SR_x{scale}_{mode}_{case_method}.npy"
+                np.save(sr_out_path, sr.astype(np.float32))
+                sr_path = str(sr_out_path)
+
+            rgb_preview_path = ""
+            false_preview_path = ""
+            zoom_preview_path = ""
+            diff_map_path = ""
+            error_map_paths = {
+                "ErrorMap_Mean_path": "",
+                "ErrorMap_NDVI_path": "",
+                "ErrorMap_NDRE_path": "",
+                "ErrorMap_Panel_path": "",
+            }
+
+            if preview_count < MAX_PREVIEW_PER_METHOD:
+                rgb_preview_path, false_preview_path, zoom_preview_path = save_preview(
+                    scene_id=scene_id,
+                    scale=scale,
+                    mode=mode,
+                    method=case_method,
+                    hr=hr,
+                    lr=lr,
+                    sr=sr
+                )
+
+                diff_map_path = save_diff_map(
+                    scene_id=scene_id,
+                    scale=scale,
+                    mode=mode,
+                    method=case_method,
+                    hr=hr,
+                    sr=sr
+                )
+
+                error_map_paths = save_error_maps(
+                    scene_id=scene_id,
+                    scale=scale,
+                    mode=mode,
+                    method=case_method,
+                    hr=hr,
+                    sr=sr
+                )
+
+                preview_count += 1
+
+            save_time_sec = time.perf_counter() - save_start_time
+            eval_total_time_sec = time.perf_counter() - eval_start_time
+
+            megapixels = get_image_megapixels(hr)
+
+            if infer_time_sec > 0:
+                mpixels_per_sec = megapixels / infer_time_sec
+                sec_per_mpixel = infer_time_sec / max(megapixels, 1e-12)
+            else:
+                mpixels_per_sec = np.nan
+                sec_per_mpixel = np.nan
+
+            row = {
+                "scene_id": scene_id,
+                "scale": scale,
+                "mode": mode,
+                "method": case_method,
+                "base_method": method,
+                "loss_profile": loss_profile_id,
+                "loss_profile_label": loss_profile_label,
+                "HR_path": str(hr_path),
+                "LR_path": str(lr_path),
+                "SR_path": sr_path,
+                "RGB_preview_path": rgb_preview_path,
+                "FalseColor_preview_path": false_preview_path,
+                "Zoom_preview_path": zoom_preview_path,
+                "Diff_map_path": diff_map_path,
+                "load_time_sec": load_time_sec,
+                "infer_time_sec": infer_time_sec,
+                "save_time_sec": save_time_sec,
+                "eval_total_time_sec": eval_total_time_sec,
+                "infer_time_hms": format_seconds(infer_time_sec),
+                "eval_total_time_hms": format_seconds(eval_total_time_sec),
+                "megapixels": megapixels,
+                "mpixels_per_sec": mpixels_per_sec,
+                "sec_per_mpixel": sec_per_mpixel,
+                "params_total": model_info["params_total"],
+                "params_trainable": model_info["params_trainable"],
+                "datetime": now_string(),
+            }
+
+            row.update(error_map_paths)
+            row.update(metrics)
+            metric_rows.append(row)
+
+            print(
+                f"[{idx + 1}/{len(test_records)}] "
+                f"{scene_id} | {mode} | {case_method} x{scale} | "
+                f"RMSE={metrics['RMSE']:.6f} | "
+                f"PSNR={metrics['PSNR']:.4f} | "
+                f"SSIM={metrics['SSIM']:.4f} | "
+                f"SAM={metrics['SAM_degree']:.4f} | "
+                f"ERGAS={metrics['ERGAS']:.4f} | "
+                f"Time={infer_time_sec:.3f}s | "
+                f"MP/s={mpixels_per_sec:.3f}"
+            )
+
+        except Exception as e:
+            print(f"[ERROR] Eval failed: scene={scene_id}, mode={mode}, method={case_method}, scale=x{scale}")
+            print(f"Reason: {e}")
+
+            error_log = OUTPUT_DIR / "sr_logs" / "sr_eval_error_log.txt"
+
+            with open(error_log, "a", encoding="utf-8") as f:
+                f.write(f"{scene_id}, {mode}, {case_method}, x{scale}: {str(e)}\n")
+
+    out_csv = OUTPUT_DIR / "sr_logs" / f"metrics_{mode}_{case_method}_x{scale}.csv"
+    write_dict_csv(out_csv, metric_rows)
+
+    return metric_rows
+
+
+def evaluate_bandwise(method, scale, models, test_records):
+    case_method = get_case_method_name(method)
+    loss_profile_id = CURRENT_LOSS_PROFILE_ID
+    loss_profile_label = get_loss_profile_label()
+
+    print("\n====================================")
+    print(f"Evaluate bandwise {case_method} x{scale}")
+    print(f"Loss profile: {loss_profile_label}")
+    print("====================================")
+
+    mode = "bandwise"
+
+    metric_rows = []
+    preview_count = 0
+
+    if method == "bicubic":
+        model_info = {
+            "params_total": 0,
+            "params_trainable": 0,
+        }
+    else:
+        total_params = 0
+        trainable_params = 0
+
+        for band_name in BANDS:
+            info = count_model_parameters(models[band_name])
+            total_params += info["params_total"]
+            trainable_params += info["params_trainable"]
+
+        model_info = {
+            "params_total": total_params,
+            "params_trainable": trainable_params,
+        }
+
+    for idx, record in enumerate(test_records):
+        scene_id = record["scene_id"]
+
+        try:
+            eval_start_time = time.perf_counter()
+
+            load_start_time = time.perf_counter()
+
+            hr_path = get_hr_path(record)
+            lr_path = get_lr_path(record, scale)
+
+            hr = load_npy(hr_path)
+            lr = load_npy(lr_path)
+
+            original_hr_shape = hr.shape
+            hr = align_hr_to_lr_scale(hr, lr, scale)
+
+            print(
+                f"[SHAPE] scene={scene_id} | mode={mode} | method={case_method} | x{scale} | "
+                f"Original_HR={original_hr_shape} | Aligned_HR={hr.shape} | LR={lr.shape} | "
+                f"Expected_SR=({lr.shape[0] * scale}, {lr.shape[1] * scale}, {lr.shape[2]})"
+            )
+
+            load_time_sec = time.perf_counter() - load_start_time
+
+            norm_factor = robust_norm_factor(hr)
+
+            infer_start_time = time.perf_counter()
+            infer_tile_size, infer_tile_overlap = get_infer_tile_settings(method)
+
+            sr_bands = []
+
+            for band_index, band_name in enumerate(BANDS):
+                lr_band = lr[..., band_index:band_index + 1]
+
+                if method == "bicubic":
+                    sr_band = bicubic_sr(
+                        lr_band,
+                        (hr.shape[0], hr.shape[1], 1)
+                    )
+                else:
+                    model = models[band_name]
+
+                    infer_tile_size, infer_tile_overlap = get_infer_tile_settings(method)
+
+                    sr_band = infer_full_image(
+                        model=model,
+                        lr_cube=lr,
+                        scale=scale,
+                        norm_factor=norm_factor,
+                        channels=1,
+                        band_index=band_index,
+                        tile_lr_size=infer_tile_size,
+                        tile_overlap=infer_tile_overlap
+                    )
+
+                    if sr_band.shape[0] != hr.shape[0] or sr_band.shape[1] != hr.shape[1]:
+                        sr_band = cv2.resize(
+                            sr_band,
+                            (hr.shape[1], hr.shape[0]),
+                            interpolation=cv2.INTER_CUBIC
+                        )
+
+                    if sr_band.ndim == 2:
+                        sr_band = sr_band[..., None]
+
+                sr_band = np.nan_to_num(sr_band, nan=0.0, posinf=0.0, neginf=0.0)
+                sr_bands.append(sr_band)
+
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+
+            infer_time_sec = time.perf_counter() - infer_start_time
+
+            sr = np.concatenate(sr_bands, axis=-1).astype(np.float32)
+
+            hr_metric, sr_metric, valid_metric_mask, valid_metric_ratio = mask_nodata_for_metrics(hr, sr)
+            metrics = calc_metrics(hr_metric, sr_metric, scale=scale)
+            metrics["valid_metric_ratio"] = valid_metric_ratio
+
+            save_start_time = time.perf_counter()
+
+            sr_path = ""
+
+            if SAVE_SR_NPY:
+                out_dir = OUTPUT_DIR / f"SR_x{scale}_{mode}_{case_method}_npy"
+                sr_out_path = out_dir / f"{scene_id}_SR_x{scale}_{mode}_{case_method}.npy"
+                np.save(sr_out_path, sr.astype(np.float32))
+                sr_path = str(sr_out_path)
+
+            rgb_preview_path = ""
+            false_preview_path = ""
+            zoom_preview_path = ""
+            diff_map_path = ""
+            error_map_paths = {
+                "ErrorMap_Mean_path": "",
+                "ErrorMap_NDVI_path": "",
+                "ErrorMap_NDRE_path": "",
+                "ErrorMap_Panel_path": "",
+            }
+
+            if preview_count < MAX_PREVIEW_PER_METHOD:
+                rgb_preview_path, false_preview_path, zoom_preview_path = save_preview(
+                    scene_id=scene_id,
+                    scale=scale,
+                    mode=mode,
+                    method=case_method,
+                    hr=hr,
+                    lr=lr,
+                    sr=sr
+                )
+
+                diff_map_path = save_diff_map(
+                    scene_id=scene_id,
+                    scale=scale,
+                    mode=mode,
+                    method=case_method,
+                    hr=hr,
+                    sr=sr
+                )
+
+                error_map_paths = save_error_maps(
+                    scene_id=scene_id,
+                    scale=scale,
+                    mode=mode,
+                    method=case_method,
+                    hr=hr,
+                    sr=sr
+                )
+
+                preview_count += 1
+
+            save_time_sec = time.perf_counter() - save_start_time
+            eval_total_time_sec = time.perf_counter() - eval_start_time
+
+            megapixels = get_image_megapixels(hr)
+
+            if infer_time_sec > 0:
+                mpixels_per_sec = megapixels / infer_time_sec
+                sec_per_mpixel = infer_time_sec / max(megapixels, 1e-12)
+            else:
+                mpixels_per_sec = np.nan
+                sec_per_mpixel = np.nan
+
+            row = {
+                "scene_id": scene_id,
+                "scale": scale,
+                "mode": mode,
+                "method": case_method,
+                "base_method": method,
+                "loss_profile": loss_profile_id,
+                "loss_profile_label": loss_profile_label,
+                "HR_path": str(hr_path),
+                "LR_path": str(lr_path),
+                "SR_path": sr_path,
+                "RGB_preview_path": rgb_preview_path,
+                "FalseColor_preview_path": false_preview_path,
+                "Zoom_preview_path": zoom_preview_path,
+                "Diff_map_path": diff_map_path,
+                "load_time_sec": load_time_sec,
+                "infer_time_sec": infer_time_sec,
+                "save_time_sec": save_time_sec,
+                "eval_total_time_sec": eval_total_time_sec,
+                "infer_time_hms": format_seconds(infer_time_sec),
+                "eval_total_time_hms": format_seconds(eval_total_time_sec),
+                "megapixels": megapixels,
+                "mpixels_per_sec": mpixels_per_sec,
+                "sec_per_mpixel": sec_per_mpixel,
+                "params_total": model_info["params_total"],
+                "params_trainable": model_info["params_trainable"],
+                "datetime": now_string(),
+            }
+
+            row.update(error_map_paths)
+            row.update(metrics)
+            metric_rows.append(row)
+
+            print(
+                f"[{idx + 1}/{len(test_records)}] "
+                f"{scene_id} | {mode} | {case_method} x{scale} | "
+                f"RMSE={metrics['RMSE']:.6f} | "
+                f"PSNR={metrics['PSNR']:.4f} | "
+                f"SSIM={metrics['SSIM']:.4f} | "
+                f"SAM={metrics['SAM_degree']:.4f} | "
+                f"ERGAS={metrics['ERGAS']:.4f} | "
+                f"Time={infer_time_sec:.3f}s | "
+                f"MP/s={mpixels_per_sec:.3f}"
+            )
+
+        except Exception as e:
+            print(f"[ERROR] Eval failed: scene={scene_id}, mode={mode}, method={case_method}, scale=x{scale}")
+            print(f"Reason: {e}")
+
+            error_log = OUTPUT_DIR / "sr_logs" / "sr_eval_error_log.txt"
+
+            with open(error_log, "a", encoding="utf-8") as f:
+                f.write(f"{scene_id}, {mode}, {case_method}, x{scale}: {str(e)}\n")
+
+    out_csv = OUTPUT_DIR / "sr_logs" / f"metrics_{mode}_{case_method}_x{scale}.csv"
+    write_dict_csv(out_csv, metric_rows)
+
+    return metric_rows
+
+
+# ============================================================
+# 13. Summary
+# ============================================================
+
+def get_summary_metric_keys():
+    return [
+        "MSE",
+        "RMSE",
+        "MAE",
+        "PSNR",
+        "SSIM",
+        "SAM_degree",
+        "SCC",
+        "UQI",
+        "R2",
+        "ERGAS",
+        "RASE",
+        "valid_metric_ratio",
+
+        "Gradient_MAE",
+        "Laplacian_MAE",
+        "Tenengrad_HR",
+        "Tenengrad_SR",
+        "Tenengrad_diff",
+        "Tenengrad_ratio",
+
+        "NDVI_MAE",
+        "GNDVI_MAE",
+        "NDRE_MAE",
+
+        "RMSE_Blue",
+        "RMSE_Green",
+        "RMSE_Red",
+        "RMSE_RedEdge",
+        "RMSE_NIR",
+
+        "MAE_Blue",
+        "MAE_Green",
+        "MAE_Red",
+        "MAE_RedEdge",
+        "MAE_NIR",
+
+        "PSNR_Blue",
+        "PSNR_Green",
+        "PSNR_Red",
+        "PSNR_RedEdge",
+        "PSNR_NIR",
+
+        "SSIM_Blue",
+        "SSIM_Green",
+        "SSIM_Red",
+        "SSIM_RedEdge",
+        "SSIM_NIR",
+
+        "load_time_sec",
+        "infer_time_sec",
+        "save_time_sec",
+        "eval_total_time_sec",
+        "megapixels",
+        "mpixels_per_sec",
+        "sec_per_mpixel",
+        "params_total",
+        "params_trainable",
+    ]
+
+
+def get_scale_tag():
+    """Return a filename-safe scale tag based on the actual SCALES setting.
+
+    Examples:
+      SCALES=[3]       -> x3
+      SCALES=[2,3,4]   -> x234
+      SCALES=[2,4]     -> x24
     """
+    return "x" + "".join(str(int(s)) for s in SCALES)
+
+
+def save_total_metrics(all_rows):
+    scale_tag = get_scale_tag()
+    out_csv = OUTPUT_DIR / "sr_logs" / f"metrics_all_methods_modes_{scale_tag}.csv"
+    write_dict_csv(out_csv, all_rows)
+
+    summary = {}
+    metric_keys = get_summary_metric_keys()
+
+    for scale in SCALES:
+        scale_key = f"x{scale}"
+        summary[scale_key] = {}
+
+        for mode in EXPERIMENT_MODES:
+            summary[scale_key][mode] = {}
+
+            for method in METHODS_TO_RUN:
+                rows = [
+                    r for r in all_rows
+                    if int(r["scale"]) == scale
+                    and r["mode"] == mode
+                    and r["method"] == method
+                ]
+
+                if len(rows) == 0:
+                    continue
+
+                summary[scale_key][mode][method] = {}
+
+                for k in metric_keys:
+                    vals = []
+
+                    for r in rows:
+                        try:
+                            v = float(r[k])
+                            if np.isfinite(v):
+                                vals.append(v)
+                        except Exception:
+                            pass
+
+                    if len(vals) > 0:
+                        summary[scale_key][mode][method][k] = {
+                            "mean": float(np.mean(vals)),
+                            "std": float(np.std(vals)),
+                            "min": float(np.min(vals)),
+                            "max": float(np.max(vals)),
+                        }
+
+    summary_path = OUTPUT_DIR / "sr_logs" / f"summary_all_methods_modes_{scale_tag}.json"
+
+    with open(summary_path, "w", encoding="utf-8") as f:
+        json.dump(summary, f, ensure_ascii=False, indent=4)
+
+    print(f"[INFO] Saved summary: {summary_path}")
+
+    paper_rows = []
+    table_metrics = get_summary_metric_keys()
+
+    for scale in SCALES:
+        for mode in EXPERIMENT_MODES:
+            for method in METHODS_TO_RUN:
+                rows = [
+                    r for r in all_rows
+                    if int(r["scale"]) == scale
+                    and r["mode"] == mode
+                    and r["method"] == method
+                ]
+
+                if len(rows) == 0:
+                    continue
+
+                paper_row = {
+                    "Scale": f"x{scale}",
+                    "Mode": mode,
+                    "Method": method,
+                }
+
+                for k in table_metrics:
+                    vals = []
+
+                    for r in rows:
+                        try:
+                            v = float(r[k])
+                            if np.isfinite(v):
+                                vals.append(v)
+                        except Exception:
+                            pass
+
+                    if len(vals) > 0:
+                        paper_row[f"{k}_mean"] = float(np.mean(vals))
+                        paper_row[f"{k}_std"] = float(np.std(vals))
+                    else:
+                        paper_row[f"{k}_mean"] = ""
+                        paper_row[f"{k}_std"] = ""
+
+                paper_rows.append(paper_row)
+
+    paper_csv = OUTPUT_DIR / "sr_logs" / f"summary_table_for_paper_modes_{scale_tag}.csv"
+    write_dict_csv(paper_csv, paper_rows)
+
+    if SAVE_EXCEL_SUMMARY:
+        try:
+            save_excel_summary(all_rows=all_rows, paper_rows=paper_rows)
+        except Exception as e:
+            print(f"[WARN] Failed to save Excel summary: {e}")
+
+
+
+def save_excel_summary(all_rows, paper_rows):
+    """
+    논문/최종 판단용으로 보기 쉬운 Excel summary 저장 함수.
+
+    생성 sheet:
+      1) Dashboard              : 핵심 결과 요약 + best model 표
+      2) Paper_Table            : 성능 + 학습시간 + 파라미터 mean ± std 표
+      3) Model_Complexity_Time  : 모델별 학습시간/파라미터/추론속도 요약
+      4) Best_by_group          : scale/mode별 RMSE 기준 최적 모델
+      5) Joint5ch_compare       : joint5ch 전체 비교
+      6) Bandwise_compare       : bandwise 전체 비교
+      7) Scale_compare          : x2/x3/x4 비교 pivot
+      8) Runtime                : scene별 추론 속도/시간 요약
+      9) Train_history_summary  : train_history_*.csv 기반 학습 요약
+      10) All_metrics           : scene별 전체 raw metric
+      11) Config                : 실행 설정
+    """
+    excel_path = OUTPUT_DIR / "sr_logs" / "summary_results.xlsx"
     log_dir = OUTPUT_DIR / "sr_logs"
-    plot_root = log_dir / "train_loss_plots"
-    individual_dir = plot_root / "individual"
-    combined_dir = plot_root / "combined"
 
-    individual_dir.mkdir(parents=True, exist_ok=True)
-    combined_dir.mkdir(parents=True, exist_ok=True)
+    all_df = pd.DataFrame(all_rows)
+    paper_df = pd.DataFrame(paper_rows)
+
+    # --------------------------------------------------------
+    # 1) 숫자형 변환
+    # --------------------------------------------------------
+    if not all_df.empty:
+        numeric_candidates = [
+            "scale", "MSE", "RMSE", "MAE", "PSNR", "SSIM", "SAM_degree",
+            "SCC", "UQI", "R2", "ERGAS", "RASE", "valid_metric_ratio",
+            "NDVI_MAE", "GNDVI_MAE", "NDRE_MAE",
+            "load_time_sec", "infer_time_sec", "save_time_sec", "eval_total_time_sec",
+            "megapixels", "mpixels_per_sec", "sec_per_mpixel",
+            "params_total", "params_trainable",
+        ]
+        numeric_candidates += [c for c in all_df.columns if c.startswith(("RMSE_", "MAE_", "PSNR_", "SSIM_"))]
+        for col in numeric_candidates:
+            if col in all_df.columns:
+                all_df[col] = pd.to_numeric(all_df[col], errors="coerce")
+
+    if not paper_df.empty:
+        for col in paper_df.columns:
+            if col.endswith("_mean") or col.endswith("_std"):
+                paper_df[col] = pd.to_numeric(paper_df[col], errors="coerce")
+
+    # --------------------------------------------------------
+    # 2) train_history_*.csv 읽어서 학습시간/epoch/파라미터 요약 생성
+    # --------------------------------------------------------
+    def hms(sec):
+        try:
+            return format_seconds(float(sec))
+        except Exception:
+            return ""
 
     history_files = sorted([
         p for p in log_dir.glob("train_history_*.csv")
         if p.name != "train_history_all.csv"
     ])
 
-    if len(history_files) == 0:
-        print("[WARN] No train_history_*.csv files found. Skip loss plotting.")
-        return
-
-    dfs = []
-
-    for path in history_files:
+    history_df_list = []
+    for csv_path in history_files:
         try:
-            df = pd.read_csv(path)
-
+            df = pd.read_csv(csv_path)
             if df.empty:
-                print(f"[WARN] Empty train history skipped: {path.name}")
                 continue
-
-            df["source_file"] = path.name
-
-            if "train_loss" in df.columns:
-                df["plot_train_loss"] = pd.to_numeric(df["train_loss"], errors="coerce")
-                df["loss_source"] = "train_loss"
-            elif "g_loss" in df.columns:
-                # ESRGAN uses generator loss as training loss.
-                df["plot_train_loss"] = pd.to_numeric(df["g_loss"], errors="coerce")
-                df["loss_source"] = "g_loss"
-            else:
-                print(f"[WARN] No train_loss/g_loss column in {path.name}. Skip.")
-                continue
-
-            if "epoch" in df.columns:
-                df["epoch"] = pd.to_numeric(df["epoch"], errors="coerce")
-            else:
-                print(f"[WARN] No epoch column in {path.name}. Skip.")
-                continue
-
-            if "scale" in df.columns:
-                df["scale"] = pd.to_numeric(df["scale"], errors="coerce")
-            else:
-                df["scale"] = np.nan
-
-            for col in ["mode", "method", "band"]:
-                if col not in df.columns:
-                    df[col] = "unknown"
-
-            df["band"] = df["band"].fillna("all").astype(str)
-            df["mode"] = df["mode"].fillna("unknown").astype(str)
-            df["method"] = df["method"].fillna("unknown").astype(str)
-
-            df = df.dropna(subset=["epoch", "plot_train_loss"])
-
-            if df.empty:
-                print(f"[WARN] No valid loss rows in {path.name}. Skip.")
-                continue
-
-            dfs.append(df)
-
+            df["source_history_file"] = csv_path.name
+            history_df_list.append(df)
         except Exception as e:
-            print(f"[WARN] Failed to read train history: {path} | {e}")
+            print(f"[WARN] Failed to read train history for Excel summary: {csv_path}, reason={e}")
 
-    if len(dfs) == 0:
-        print("[WARN] No valid train history data. Skip loss plotting.")
-        return
+    if len(history_df_list) > 0:
+        train_history_df = pd.concat(history_df_list, ignore_index=True, sort=False)
+    else:
+        train_history_df = pd.DataFrame()
 
-    all_df = pd.concat(dfs, ignore_index=True, sort=False)
+    if not train_history_df.empty:
+        for col in [
+            "epoch", "scale", "train_loss", "val_loss", "g_loss", "d_loss", "lr",
+            "train_time_sec", "val_time_sec", "epoch_time_sec", "params_total", "params_trainable",
+            "generator_params_total", "generator_params_trainable",
+            "discriminator_params_total", "discriminator_params_trainable",
+        ]:
+            if col in train_history_df.columns:
+                train_history_df[col] = pd.to_numeric(train_history_df[col], errors="coerce")
 
-    merged_csv = plot_root / "train_history_for_loss_plots.csv"
-    all_df.to_csv(merged_csv, index=False, encoding="utf-8-sig")
+    train_summary_rows = []
+    if not train_history_df.empty:
+        group_cols = [c for c in ["scale", "mode", "method"] if c in train_history_df.columns]
+        if len(group_cols) == 3:
+            for (scale, mode, method), g in train_history_df.groupby(group_cols, dropna=False):
+                bands = ""
+                n_bands = 1
+                if "band" in g.columns:
+                    bands_list = [str(x) for x in g["band"].dropna().unique().tolist()]
+                    bands = ", ".join(bands_list)
+                    # bandwise에서는 all이 아닌 밴드 수를 카운트
+                    band_real = [b for b in bands_list if b.lower() != "all"]
+                    n_bands = len(band_real) if len(band_real) > 0 else 1
 
-    def _safe_name(x):
-        x = str(x)
-        x = re.sub(r"[^\w\-.]+", "_", x)
-        x = re.sub(r"_+", "_", x)
-        return x.strip("_")
+                total_train_sec = float(g["train_time_sec"].sum()) if "train_time_sec" in g.columns else np.nan
+                total_val_sec = float(g["val_time_sec"].sum()) if "val_time_sec" in g.columns else np.nan
+                total_epoch_sec = float(g["epoch_time_sec"].sum()) if "epoch_time_sec" in g.columns else np.nan
+                epoch_mean_sec = float(g["epoch_time_sec"].mean()) if "epoch_time_sec" in g.columns else np.nan
+                n_epochs_rows = int(len(g))
+                max_epoch = int(g["epoch"].max()) if "epoch" in g.columns and pd.notna(g["epoch"].max()) else ""
 
-    def _scale_label(x):
-        try:
-            return f"x{int(float(x))}"
-        except Exception:
-            return f"x{x}"
+                params_total = np.nan
+                params_trainable = np.nan
+                gen_params_total = np.nan
+                disc_params_total = np.nan
 
-    try:
-        import matplotlib.pyplot as plt
-    except Exception as e:
-        print(f"[WARN] matplotlib import failed. CSV is saved but plots are skipped. Reason: {e}")
-        return
+                if "params_total" in g.columns and g["params_total"].notna().any():
+                    # joint는 모델 1개, bandwise는 band별 모델 합산이 논문 표에 더 적합
+                    vals = g.drop_duplicates(subset=[c for c in ["band", "params_total"] if c in g.columns])["params_total"].dropna()
+                    params_total = float(vals.sum()) if str(mode) == "bandwise" else float(vals.max())
+                if "params_trainable" in g.columns and g["params_trainable"].notna().any():
+                    vals = g.drop_duplicates(subset=[c for c in ["band", "params_trainable"] if c in g.columns])["params_trainable"].dropna()
+                    params_trainable = float(vals.sum()) if str(mode) == "bandwise" else float(vals.max())
 
-    plt.rcParams["font.family"] = "Times New Roman"
-    plt.rcParams["axes.unicode_minus"] = False
+                if "generator_params_total" in g.columns and g["generator_params_total"].notna().any():
+                    vals = g.drop_duplicates(subset=[c for c in ["band", "generator_params_total"] if c in g.columns])["generator_params_total"].dropna()
+                    gen_params_total = float(vals.sum()) if str(mode) == "bandwise" else float(vals.max())
+                    params_total = gen_params_total
+                if "discriminator_params_total" in g.columns and g["discriminator_params_total"].notna().any():
+                    vals = g.drop_duplicates(subset=[c for c in ["band", "discriminator_params_total"] if c in g.columns])["discriminator_params_total"].dropna()
+                    disc_params_total = float(vals.sum()) if str(mode) == "bandwise" else float(vals.max())
 
-    summary_rows = []
+                final_val_loss = np.nan
+                for loss_col in ["val_loss", "g_loss", "train_loss"]:
+                    if loss_col in g.columns and g[loss_col].notna().any():
+                        gg = g.sort_values(["source_history_file", "epoch"] if "source_history_file" in g.columns and "epoch" in g.columns else None)
+                        final_val_loss = float(gg[loss_col].dropna().iloc[-1])
+                        break
+
+                train_summary_rows.append({
+                    "Scale": f"x{int(scale)}" if pd.notna(scale) else scale,
+                    "Mode": mode,
+                    "Method": method,
+                    "Bands": bands,
+                    "N band models": n_bands,
+                    "Max epoch": max_epoch,
+                    "History rows": n_epochs_rows,
+                    "Total train sec": total_train_sec,
+                    "Total train hms": hms(total_train_sec),
+                    "Total val sec": total_val_sec,
+                    "Total epoch sec": total_epoch_sec,
+                    "Total epoch hms": hms(total_epoch_sec),
+                    "Mean epoch sec": epoch_mean_sec,
+                    "Mean epoch hms": hms(epoch_mean_sec),
+                    "Final/last loss": final_val_loss,
+                    "Params total": params_total,
+                    "Params trainable": params_trainable,
+                    "Generator params total": gen_params_total,
+                    "Discriminator params total": disc_params_total,
+                })
+
+    train_summary_df = pd.DataFrame(train_summary_rows)
 
     # --------------------------------------------------------
-    # 1) Individual loss curve per scale/mode/method/band
+    # 3) 핵심 metric compact table 생성
     # --------------------------------------------------------
-    for (scale, mode, method, band), g in all_df.groupby(["scale", "mode", "method", "band"], dropna=False):
-        g = g.sort_values("epoch")
+    metric_map = [
+        ("RMSE", "RMSE ↓", 6),
+        ("MAE", "MAE ↓", 6),
+        ("PSNR", "PSNR ↑", 4),
+        ("SSIM", "SSIM ↑", 4),
+        ("SAM_degree", "SAM ↓", 4),
+        ("ERGAS", "ERGAS ↓", 4),
+        ("RASE", "RASE ↓", 4),
+        ("NDVI_MAE", "NDVI MAE ↓", 6),
+        ("GNDVI_MAE", "GNDVI MAE ↓", 6),
+        ("NDRE_MAE", "NDRE MAE ↓", 6),
+        ("infer_time_sec", "Infer sec ↓", 4),
+        ("mpixels_per_sec", "MP/s ↑", 4),
+        ("sec_per_mpixel", "sec/MP ↓", 4),
+        ("params_total", "Params total", 0),
+        ("params_trainable", "Params trainable", 0),
+    ]
 
-        if g.empty:
-            continue
+    def mean_std_text(mean_v, std_v, digits=4):
+        if pd.isna(mean_v):
+            return ""
+        if digits == 0:
+            if pd.isna(std_v):
+                return f"{mean_v:,.0f}"
+            return f"{mean_v:,.0f} ± {std_v:,.0f}"
+        if pd.isna(std_v):
+            return f"{mean_v:.{digits}f}"
+        return f"{mean_v:.{digits}f} ± {std_v:.{digits}f}"
 
-        scale_label = _scale_label(scale)
-        band_label = str(band)
+    compact_rows = []
+    rank_rows = []
+    if not paper_df.empty:
+        for _, r in paper_df.iterrows():
+            row = {
+                "Scale": r.get("Scale", ""),
+                "Mode": r.get("Mode", ""),
+                "Method": r.get("Method", ""),
+            }
+            rank_row = row.copy()
+            for base, label, digits in metric_map:
+                m = r.get(f"{base}_mean", np.nan)
+                s = r.get(f"{base}_std", np.nan)
+                row[label] = mean_std_text(m, s, digits)
+                rank_row[label] = m
+            compact_rows.append(row)
+            rank_rows.append(rank_row)
 
-        fig, ax = plt.subplots(figsize=(8, 5))
-        ax.plot(
-            g["epoch"].values,
-            g["plot_train_loss"].values,
-            linewidth=2.0,
-            label="Training loss"
+    paper_compact_df = pd.DataFrame(compact_rows)
+    rank_df = pd.DataFrame(rank_rows)
+
+    # --------------------------------------------------------
+    # 4) 성능 + 학습시간 + 파라미터 통합 표
+    # --------------------------------------------------------
+    model_complexity_df = rank_df.copy()
+    if not model_complexity_df.empty and not train_summary_df.empty:
+        model_complexity_df = model_complexity_df.merge(
+            train_summary_df,
+            on=["Scale", "Mode", "Method"],
+            how="left"
+        )
+    elif model_complexity_df.empty:
+        model_complexity_df = train_summary_df.copy()
+
+    # bicubic은 학습이 없으므로 보기 좋게 0/Non-trainable 처리
+    if not model_complexity_df.empty:
+        if "Method" in model_complexity_df.columns:
+            bicubic_mask = model_complexity_df["Method"].astype(str).str.lower().eq("bicubic")
+            for col in ["Total train sec", "Total val sec", "Total epoch sec", "Mean epoch sec", "Params total", "Params trainable"]:
+                if col in model_complexity_df.columns:
+                    model_complexity_df.loc[bicubic_mask & model_complexity_df[col].isna(), col] = 0
+            for col in ["Total train hms", "Total epoch hms", "Mean epoch hms"]:
+                if col in model_complexity_df.columns:
+                    model_complexity_df.loc[bicubic_mask & model_complexity_df[col].isna(), col] = "00:00:00.00"
+            if "Bands" in model_complexity_df.columns:
+                model_complexity_df.loc[bicubic_mask & model_complexity_df["Bands"].isna(), "Bands"] = "no training"
+
+    # Paper table에도 핵심 학습정보 결합
+    paper_plus_df = paper_compact_df.copy()
+    if not paper_plus_df.empty and not model_complexity_df.empty:
+        add_cols = [c for c in [
+            "Scale", "Mode", "Method", "Total train hms", "Mean epoch hms",
+            "Max epoch", "Params total", "Params trainable", "Generator params total", "Discriminator params total"
+        ] if c in model_complexity_df.columns]
+        paper_plus_df = paper_plus_df.merge(
+            model_complexity_df[add_cols].drop_duplicates(subset=["Scale", "Mode", "Method"]),
+            on=["Scale", "Mode", "Method"],
+            how="left"
         )
 
-        title = f"{scale_label} | {mode} | {method}"
-        if band_label.lower() != "all":
-            title += f" | {band_label}"
-
-        ax.set_title(title, fontsize=14, fontweight="bold")
-        ax.set_xlabel("Epoch", fontsize=12, fontweight="bold")
-        ax.set_ylabel("Training loss", fontsize=12, fontweight="bold")
-        ax.tick_params(axis="both", labelsize=10)
-        ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.5)
-        ax.legend(fontsize=9)
-        fig.tight_layout()
-
-        out_path = individual_dir / (
-            f"train_loss_{scale_label}_{_safe_name(mode)}_"
-            f"{_safe_name(method)}_{_safe_name(band_label)}.png"
-        )
-
-        fig.savefig(out_path, dpi=300, bbox_inches="tight")
-        plt.close(fig)
-
-        losses = g["plot_train_loss"].dropna().values
-
-        summary_rows.append({
-            "scale": scale_label,
-            "mode": mode,
-            "method": method,
-            "band": band_label,
-            "n_epochs": int(len(g)),
-            "loss_start": float(losses[0]) if len(losses) else np.nan,
-            "loss_end": float(losses[-1]) if len(losses) else np.nan,
-            "loss_min": float(np.min(losses)) if len(losses) else np.nan,
-            "loss_max": float(np.max(losses)) if len(losses) else np.nan,
-            "loss_source": str(g["loss_source"].iloc[0]) if "loss_source" in g.columns else "",
-            "plot_path": str(out_path),
-        })
-
-    # --------------------------------------------------------
-    # 2) Combined curve by scale/mode
-    #    bandwise는 method별로 밴드 평균 loss를 그립니다.
-    # --------------------------------------------------------
-    for (scale, mode), g_mode in all_df.groupby(["scale", "mode"], dropna=False):
-        scale_label = _scale_label(scale)
-        mode_label = str(mode)
-
-        fig, ax = plt.subplots(figsize=(10, 6))
-
-        for method, g_method in g_mode.groupby("method", dropna=False):
-            gg = (
-                g_method
-                .groupby("epoch", as_index=False)["plot_train_loss"]
-                .mean()
-                .sort_values("epoch")
+    # Rank columns: scale/mode 안에서 성능 순위를 자동 계산
+    if ADD_RANK_COLUMNS and not model_complexity_df.empty:
+        rank_specs = {
+            "RMSE ↓": True,
+            "MAE ↓": True,
+            "SAM ↓": True,
+            "ERGAS ↓": True,
+            "NDVI MAE ↓": True,
+            "NDRE MAE ↓": True,
+            "PSNR ↑": False,
+            "SSIM ↑": False,
+            "MP/s ↑": False,
+        }
+        rank_cols = []
+        group_keys = [model_complexity_df["Scale"], model_complexity_df["Mode"]]
+        for metric_col, ascending in rank_specs.items():
+            if metric_col in model_complexity_df.columns:
+                rcol = metric_col.replace(" ↓", " rank").replace(" ↑", " rank")
+                model_complexity_df[rcol] = pd.to_numeric(model_complexity_df[metric_col], errors="coerce").groupby(group_keys).rank(
+                    method="min", ascending=ascending, na_option="bottom"
+                )
+                rank_cols.append(rcol)
+        if len(rank_cols) > 0:
+            model_complexity_df["Overall rank score"] = model_complexity_df[rank_cols].mean(axis=1, skipna=True)
+            model_complexity_df["Overall rank"] = model_complexity_df["Overall rank score"].groupby(group_keys).rank(
+                method="min", ascending=True, na_option="bottom"
             )
 
-            if gg.empty:
-                continue
-
-            ax.plot(
-                gg["epoch"].values,
-                gg["plot_train_loss"].values,
-                linewidth=2.0,
-                label=str(method)
+        if not paper_plus_df.empty:
+            rank_add_cols = [c for c in ["Scale", "Mode", "Method", "Overall rank", "Overall rank score"] + rank_cols if c in model_complexity_df.columns]
+            paper_plus_df = paper_plus_df.merge(
+                model_complexity_df[rank_add_cols].drop_duplicates(subset=["Scale", "Mode", "Method"]),
+                on=["Scale", "Mode", "Method"],
+                how="left"
             )
 
-        ax.set_title(
-            f"Training loss comparison | {scale_label} | {mode_label}",
-            fontsize=14,
-            fontweight="bold"
-        )
-        ax.set_xlabel("Epoch", fontsize=12, fontweight="bold")
-        ax.set_ylabel("Training loss", fontsize=12, fontweight="bold")
-        ax.tick_params(axis="both", labelsize=10)
-        ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.5)
-        ax.legend(fontsize=9, ncol=2)
-        fig.tight_layout()
+    # --------------------------------------------------------
+    # 5) Best model by Scale/Mode: RMSE 낮은 순
+    # --------------------------------------------------------
+    best_df = pd.DataFrame()
+    if not rank_df.empty and "RMSE ↓" in rank_df.columns:
+        tmp = rank_df.dropna(subset=["RMSE ↓"]).copy()
+        if not tmp.empty:
+            tmp = tmp.sort_values(["Scale", "Mode", "RMSE ↓"], ascending=[True, True, True])
+            best_df = tmp.groupby(["Scale", "Mode"], as_index=False).first()
+            if not train_summary_df.empty:
+                add_cols = [c for c in ["Scale", "Mode", "Method", "Total train hms", "Mean epoch hms", "Params total"] if c in train_summary_df.columns]
+                best_df = best_df.merge(train_summary_df[add_cols], on=["Scale", "Mode", "Method"], how="left")
 
-        out_path = combined_dir / f"train_loss_compare_{scale_label}_{_safe_name(mode_label)}.png"
-        fig.savefig(out_path, dpi=300, bbox_inches="tight")
-        plt.close(fig)
+    # --------------------------------------------------------
+    # 6) Joint/Bandwise/Scale 비교표
+    # --------------------------------------------------------
+    if not model_complexity_df.empty:
+        joint_df = model_complexity_df[model_complexity_df["Mode"] == "joint5ch"].copy() if "Mode" in model_complexity_df.columns else pd.DataFrame()
+        band_df = model_complexity_df[model_complexity_df["Mode"] == "bandwise"].copy() if "Mode" in model_complexity_df.columns else pd.DataFrame()
+    else:
+        joint_df = pd.DataFrame()
+        band_df = pd.DataFrame()
 
-    summary_df = pd.DataFrame(summary_rows)
-    summary_csv = plot_root / "train_loss_plot_summary.csv"
-    summary_df.to_csv(summary_csv, index=False, encoding="utf-8-sig")
+    if not rank_df.empty:
+        pivot_metrics = ["RMSE ↓", "PSNR ↑", "SSIM ↑", "SAM ↓", "ERGAS ↓", "Infer sec ↓", "MP/s ↑", "Params total"]
+        pivot_metrics = [m for m in pivot_metrics if m in rank_df.columns]
+        if len(pivot_metrics) > 0:
+            scale_df = rank_df.pivot_table(index=["Mode", "Method"], columns="Scale", values=pivot_metrics, aggfunc="first")
+            scale_df.columns = [f"{metric}_{scale}" for metric, scale in scale_df.columns]
+            scale_df = scale_df.reset_index()
+        else:
+            scale_df = pd.DataFrame()
+    else:
+        scale_df = pd.DataFrame()
 
-    print("\n====================================")
-    print("Training loss plots saved")
-    print("====================================")
-    print(f"Merged loss CSV : {merged_csv}")
-    print(f"Summary CSV     : {summary_csv}")
-    print(f"Individual dir  : {individual_dir}")
-    print(f"Combined dir    : {combined_dir}")
-    print("====================================")
+    # --------------------------------------------------------
+    # 7) Runtime table: scene별 추론 시간 요약
+    # --------------------------------------------------------
+    runtime_rows = []
+    if not all_df.empty:
+        for (scale, mode, method), g in all_df.groupby(["scale", "mode", "method"]):
+            runtime_rows.append({
+                "Scale": f"x{int(scale)}" if pd.notna(scale) else scale,
+                "Mode": mode,
+                "Method": method,
+                "N scenes": int(len(g)),
+                "Infer sec mean": float(g["infer_time_sec"].mean()) if "infer_time_sec" in g else np.nan,
+                "Infer sec std": float(g["infer_time_sec"].std()) if "infer_time_sec" in g else np.nan,
+                "Eval total sec mean": float(g["eval_total_time_sec"].mean()) if "eval_total_time_sec" in g else np.nan,
+                "MP/s mean": float(g["mpixels_per_sec"].mean()) if "mpixels_per_sec" in g else np.nan,
+                "sec/MP mean": float(g["sec_per_mpixel"].mean()) if "sec_per_mpixel" in g else np.nan,
+            })
+    runtime_df = pd.DataFrame(runtime_rows)
+
+    # --------------------------------------------------------
+    # 8) Config / Dashboard
+    # --------------------------------------------------------
+    config_rows = []
+    for k, v in RUN_CONFIG_CACHE.items():
+        if isinstance(v, (list, dict)):
+            v = json.dumps(v, ensure_ascii=False)
+        config_rows.append({"key": k, "value": str(v)})
+    config_df = pd.DataFrame(config_rows)
+
+    dashboard_rows = []
+    dashboard_rows.append(["Final SR experiment summary", ""])
+    dashboard_rows.append(["Output folder", str(OUTPUT_DIR)])
+    dashboard_rows.append(["Scales", ", ".join([f"x{s}" for s in SCALES])])
+    dashboard_rows.append(["Modes", ", ".join(EXPERIMENT_MODES)])
+    dashboard_rows.append(["Methods", ", ".join(METHODS_TO_RUN)])
+    dashboard_rows.append(["Total evaluated rows", int(len(all_df)) if not all_df.empty else 0])
+    dashboard_rows.append(["Training histories found", len(history_files)])
+    dashboard_rows.append(["Best criterion", "Lowest RMSE within each Scale × Mode"])
+    dashboard_df = pd.DataFrame(dashboard_rows, columns=["Item", "Value"])
+
+    # --------------------------------------------------------
+    # 9) Excel 저장
+    # --------------------------------------------------------
+    with pd.ExcelWriter(excel_path, engine="openpyxl") as writer:
+        dashboard_df.to_excel(writer, sheet_name="Dashboard", index=False, startrow=0)
+        if not best_df.empty:
+            best_df.to_excel(writer, sheet_name="Dashboard", index=False, startrow=len(dashboard_df) + 3)
+
+        paper_plus_df.to_excel(writer, sheet_name="Paper_Table", index=False)
+        model_complexity_df.to_excel(writer, sheet_name="Model_Complexity_Time", index=False)
+        best_df.to_excel(writer, sheet_name="Best_by_group", index=False)
+        joint_df.to_excel(writer, sheet_name="Joint5ch_compare", index=False)
+        band_df.to_excel(writer, sheet_name="Bandwise_compare", index=False)
+        scale_df.to_excel(writer, sheet_name="Scale_compare", index=False)
+        runtime_df.to_excel(writer, sheet_name="Runtime", index=False)
+        train_summary_df.to_excel(writer, sheet_name="Train_history_summary", index=False)
+        paper_df.to_excel(writer, sheet_name="Summary_mean_std_raw", index=False)
+        all_df.to_excel(writer, sheet_name="All_metrics", index=False)
+        config_df.to_excel(writer, sheet_name="Config", index=False)
+
+        wb = writer.book
+
+        from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
+        from openpyxl.formatting.rule import ColorScaleRule
+        from openpyxl.utils import get_column_letter
+
+        dark_fill = PatternFill("solid", fgColor="1F4E78")
+        mid_fill = PatternFill("solid", fgColor="D9EAF7")
+        light_fill = PatternFill("solid", fgColor="EEF5FB")
+        best_fill = PatternFill("solid", fgColor="E2F0D9")
+        white_font = Font(color="FFFFFF", bold=True)
+        title_font = Font(size=14, bold=True, color="1F4E78")
+        header_font = Font(color="FFFFFF", bold=True)
+        thin = Side(style="thin", color="D9E2F3")
+        border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+        def style_sheet(ws, freeze="A2", auto_filter=True, max_width=40):
+            ws.freeze_panes = freeze
+            if ws.max_row >= 1:
+                for cell in ws[1]:
+                    cell.fill = dark_fill
+                    cell.font = header_font
+                    cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+                    cell.border = border
+            for row in ws.iter_rows(min_row=2, max_row=ws.max_row, max_col=ws.max_column):
+                for cell in row:
+                    cell.border = border
+                    cell.alignment = Alignment(vertical="center", wrap_text=False)
+            if auto_filter and ws.max_row >= 2 and ws.max_column >= 1:
+                ws.auto_filter.ref = ws.dimensions
+            for col_idx in range(1, ws.max_column + 1):
+                col_letter = get_column_letter(col_idx)
+                max_len = 0
+                for cell in ws[col_letter]:
+                    val = cell.value
+                    if val is None:
+                        continue
+                    max_len = max(max_len, len(str(val)))
+                ws.column_dimensions[col_letter].width = min(max(max_len + 2, 10), max_width)
+            for row in ws.iter_rows(min_row=2, max_row=ws.max_row, max_col=ws.max_column):
+                for cell in row:
+                    if isinstance(cell.value, float):
+                        h = str(ws.cell(row=1, column=cell.column).value).lower()
+                        if "param" in h:
+                            cell.number_format = "#,##0"
+                        elif abs(cell.value) >= 1000:
+                            cell.number_format = "#,##0.00"
+                        elif abs(cell.value) >= 1:
+                            cell.number_format = "0.0000"
+                        else:
+                            cell.number_format = "0.000000"
+
+        for ws_name in wb.sheetnames:
+            ws = wb[ws_name]
+            style_sheet(ws)
+
+        ws = wb["Dashboard"]
+        ws.freeze_panes = "A2"
+        ws["A1"].font = title_font
+        ws["A1"].fill = mid_fill
+        ws["B1"].fill = mid_fill
+        ws.column_dimensions["A"].width = 26
+        ws.column_dimensions["B"].width = 95
+        for row in range(2, len(dashboard_df) + 1):
+            ws[f"A{row}"].fill = light_fill
+            ws[f"A{row}"].font = Font(bold=True, color="1F4E78")
+            ws[f"B{row}"].alignment = Alignment(wrap_text=True, vertical="center")
+        best_start_row = len(dashboard_df) + 4
+        if not best_df.empty:
+            for cell in ws[best_start_row]:
+                cell.fill = dark_fill
+                cell.font = white_font
+                cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            for row in range(best_start_row + 1, ws.max_row + 1):
+                for cell in ws[row]:
+                    cell.fill = best_fill
+
+        lower_better_keywords = ["RMSE", "MAE", "SAM", "ERGAS", "RASE", "Infer sec", "sec/MP", "loss"]
+        higher_better_keywords = ["PSNR", "SSIM", "MP/s", "SCC", "UQI", "R2"]
+
+        def apply_metric_color_scale(ws):
+            if ws.max_row < 3:
+                return
+            headers = [ws.cell(row=1, column=c).value for c in range(1, ws.max_column + 1)]
+            for c, header in enumerate(headers, start=1):
+                h = str(header)
+                if any(k in h for k in lower_better_keywords) or any(k in h for k in higher_better_keywords):
+                    col_letter = get_column_letter(c)
+                    rng = f"{col_letter}2:{col_letter}{ws.max_row}"
+                    numeric_values = [ws.cell(row=r, column=c).value for r in range(2, ws.max_row + 1)]
+                    if not any(isinstance(v, (int, float)) for v in numeric_values):
+                        continue
+                    if any(k in h for k in lower_better_keywords):
+                        ws.conditional_formatting.add(
+                            rng,
+                            ColorScaleRule(
+                                start_type="min", start_color="63BE7B",
+                                mid_type="percentile", mid_value=50, mid_color="FFEB84",
+                                end_type="max", end_color="F8696B"
+                            )
+                        )
+                    else:
+                        ws.conditional_formatting.add(
+                            rng,
+                            ColorScaleRule(
+                                start_type="min", start_color="F8696B",
+                                mid_type="percentile", mid_value=50, mid_color="FFEB84",
+                                end_type="max", end_color="63BE7B"
+                            )
+                        )
+
+        for name in [
+            "Best_by_group", "Joint5ch_compare", "Bandwise_compare", "Scale_compare",
+            "Runtime", "Train_history_summary", "Model_Complexity_Time", "Summary_mean_std_raw"
+        ]:
+            if name in wb.sheetnames:
+                apply_metric_color_scale(wb[name])
+
+        for name in [
+            "Paper_Table", "Model_Complexity_Time", "Best_by_group", "Joint5ch_compare",
+            "Bandwise_compare", "Scale_compare", "Runtime", "Train_history_summary"
+        ]:
+            if name in wb.sheetnames:
+                ws = wb[name]
+                for col in ["A", "B", "C"]:
+                    ws.column_dimensions[col].width = 16
+
+        if "All_metrics" in wb.sheetnames:
+            ws = wb["All_metrics"]
+            for col_idx in range(1, ws.max_column + 1):
+                header = str(ws.cell(row=1, column=col_idx).value)
+                if "path" in header.lower():
+                    ws.column_dimensions[get_column_letter(col_idx)].width = 18
+                    ws.column_dimensions[get_column_letter(col_idx)].hidden = True
+
+        tab_colors = {
+            "Dashboard": "1F4E78",
+            "Paper_Table": "70AD47",
+            "Model_Complexity_Time": "8064A2",
+            "Best_by_group": "70AD47",
+            "Joint5ch_compare": "5B9BD5",
+            "Bandwise_compare": "ED7D31",
+            "Scale_compare": "A5A5A5",
+            "Runtime": "FFC000",
+            "Train_history_summary": "9E480E",
+            "All_metrics": "808080",
+            "Config": "7030A0",
+        }
+        for name, color in tab_colors.items():
+            if name in wb.sheetnames:
+                wb[name].sheet_properties.tabColor = color
+
+    print(f"[INFO] Saved clean Excel summary with training time/model complexity: {excel_path}")
 
 # ============================================================
 # 14. Main
@@ -3657,197 +6119,407 @@ def main():
         "SCENE_INDEX_PATH": str(SCENE_INDEX_PATH),
         "OUTPUT_ROOT": str(OUTPUT_ROOT),
         "RUN_NAME": RUN_NAME,
-        "OUTPUT_DIR": str(OUTPUT_DIR),
         "CHECKPOINT_RUN_NAME": CHECKPOINT_RUN_NAME,
+        "OUTPUT_DIR": str(OUTPUT_DIR),
         "CHECKPOINT_DIR": str(CHECKPOINT_DIR),
-        "DEVICE": DEVICE,
         "EXPERIMENT_PRESET": EXPERIMENT_PRESET,
         "USER_SCALES": USER_SCALES,
         "SCALES": SCALES,
-        "EXPERIMENT_MODES": EXPERIMENT_MODES,
-        "METHODS_TO_RUN": METHODS_TO_RUN,
+        "SCALE_TAG": get_scale_tag(),
         "JOINT_METHODS_TO_RUN": JOINT_METHODS_TO_RUN,
         "BANDWISE_METHODS_TO_RUN": BANDWISE_METHODS_TO_RUN,
-        "RUN_JOINT_5CH": RUN_JOINT_5CH,
-        "RUN_BANDWISE_ABLATION": RUN_BANDWISE_ABLATION,
         "EPOCHS": EPOCHS,
         "PATCHES_PER_EPOCH": PATCHES_PER_EPOCH,
-        "BATCH_SIZE": BATCH_SIZE,
-        "NUM_WORKERS": NUM_WORKERS,
-        "LR": LR,
-        "WEIGHT_DECAY": WEIGHT_DECAY,
+        "SAVE_SR_NPY": SAVE_SR_NPY,
+        "SAVE_PREVIEW": SAVE_PREVIEW,
+        "SAVE_ZOOM_PREVIEW": SAVE_ZOOM_PREVIEW,
+        "SAVE_SEPARATE_PREVIEW": SAVE_SEPARATE_PREVIEW,
+        "SAVE_DIFF_MAP": SAVE_DIFF_MAP,
+        "SAVE_EXCEL_SUMMARY": SAVE_EXCEL_SUMMARY,
+        "SAVE_TRAIN_LOSS_PLOTS": SAVE_TRAIN_LOSS_PLOTS,
         "SAVE_CHECKPOINT": SAVE_CHECKPOINT,
-        "INPUT_ALREADY_NORMALIZED": INPUT_ALREADY_NORMALIZED,
         "USE_RESIDUAL_SR": USE_RESIDUAL_SR,
-        "MODEL_FORWARD_CLAMP": False,
-        "INFERENCE_CLIP_RANGE": [0.0, 1.5],
-        "ESRGAN_RESIDUAL_SR": USE_RESIDUAL_SR,
-        "RESIDUAL_DETAIL_ZERO_INIT": True,
-        "VAL_PATCHES_PER_SCENE": VAL_PATCHES_PER_SCENE,
         "USE_SHARPNESS_LOSS": USE_SHARPNESS_LOSS,
-        "USE_AMP": USE_AMP,
+        "L1_WEIGHT": L1_WEIGHT,
+        "CHARBONNIER_WEIGHT": CHARBONNIER_WEIGHT,
+        "SSIM_WEIGHT": SSIM_WEIGHT,
+        "GRAD_WEIGHT": GRAD_WEIGHT,
+        "FREQ_WEIGHT": FREQ_WEIGHT,
+        "EDGE_WEIGHT": EDGE_WEIGHT,
+        "SAM_WEIGHT": SAM_WEIGHT,
+        "VI_WEIGHT": VI_WEIGHT,
+        "RUN_LOSS_ABLATION": RUN_LOSS_ABLATION,
+        "LOSS_ABLATION_METHODS": LOSS_ABLATION_METHODS,
+        "LOSS_ABLATION_MODES": LOSS_ABLATION_MODES,
+        "LOSS_ABLATION_INCLUDE_FULL_LOSS_BASELINE": LOSS_ABLATION_INCLUDE_FULL_LOSS_BASELINE,
+        "LOSS_ABLATION_PROFILE_IDS": LOSS_ABLATION_PROFILE_IDS,
+        "LOSS_PROFILES": LOSS_PROFILES,
+        "ZOOM_CROP_SIZE": ZOOM_CROP_SIZE,
+        "ERROR_MAP_PERCENTILE": ERROR_MAP_PERCENTILE,
+        "NODATA_THRESHOLD": NODATA_THRESHOLD,
+        "ENABLE_SCENE_QUALITY_FILTER": ENABLE_SCENE_QUALITY_FILTER,
+        "ENABLE_PATCH_QUALITY_FILTER": ENABLE_PATCH_QUALITY_FILTER,
+        "ENABLE_PATCH_LRUP_HR_FILTER": ENABLE_PATCH_LRUP_HR_FILTER,
+        "DROP_BAD_SCENES": DROP_BAD_SCENES,
+        "SCENE_FILTER_SAMPLE_STRIDE": SCENE_FILTER_SAMPLE_STRIDE,
+        "MAX_SCENE_INVALID_RATIO": MAX_SCENE_INVALID_RATIO,
+        "MIN_SCENE_VALID_RATIO": MIN_SCENE_VALID_RATIO,
+        "MIN_SCENE_STD": MIN_SCENE_STD,
+        "MIN_SCENE_DYNAMIC_RANGE": MIN_SCENE_DYNAMIC_RANGE,
+        "MAX_SCENE_LRUP_HR_RMSE": MAX_SCENE_LRUP_HR_RMSE,
+        "PATCH_QUALITY_RANDOM_TRIES": PATCH_QUALITY_RANDOM_TRIES,
+        "MAX_PATCH_INVALID_RATIO": MAX_PATCH_INVALID_RATIO,
+        "MIN_PATCH_VALID_RATIO": MIN_PATCH_VALID_RATIO,
+        "MIN_PATCH_STD": MIN_PATCH_STD,
+        "MIN_PATCH_DYNAMIC_RANGE": MIN_PATCH_DYNAMIC_RANGE,
+        "MAX_PATCH_LRUP_HR_RMSE": MAX_PATCH_LRUP_HR_RMSE,
+        "INPUT_ALREADY_NORMALIZED": INPUT_ALREADY_NORMALIZED,
+        "USE_NPY_CACHE": USE_NPY_CACHE,
+        "NPY_CACHE_MAX_ITEMS": NPY_CACHE_MAX_ITEMS,
+        "FAST_STARTUP_SCAN": FAST_STARTUP_SCAN,
+        "MAX_RECORDS_FOR_TEST": MAX_RECORDS_FOR_TEST,
+        "EVAL_RECORD_SOURCE": EVAL_RECORD_SOURCE,
+        "EVAL_SAMPLE_SIZE": EVAL_SAMPLE_SIZE,
+        "EVAL_SAMPLE_RANDOM": EVAL_SAMPLE_RANDOM,
+        "SWINIR_TILE_LR_SIZE": SWINIR_TILE_LR_SIZE,
+        "SWINIR_TILE_OVERLAP": SWINIR_TILE_OVERLAP,
+        "COMPUTE_GLOBAL_SSIM": COMPUTE_GLOBAL_SSIM,
+        "COMPUTE_BANDWISE_SSIM": COMPUTE_BANDWISE_SSIM,
+        "COMPUTE_SHARPNESS_METRICS": COMPUTE_SHARPNESS_METRICS,
+        "POSTPROCESS_ONLY": POSTPROCESS_ONLY,
+        "EVAL_ONLY_NO_TRAIN": EVAL_ONLY_NO_TRAIN,
+        "SKIP_TRAIN_IF_CHECKPOINT_EXISTS": SKIP_TRAIN_IF_CHECKPOINT_EXISTS,
+        "SKIP_EVAL_IF_METRICS_EXISTS": SKIP_EVAL_IF_METRICS_EXISTS,
+        "LOAD_EXISTING_METRICS_WHEN_SKIP_EVAL": LOAD_EXISTING_METRICS_WHEN_SKIP_EVAL,
         "EARLY_STOPPING": EARLY_STOPPING,
         "PATIENCE": PATIENCE,
         "MIN_DELTA": MIN_DELTA,
-        "TRAIN_ONLY_NO_EVAL": True,
-        "SRCNN_IMPROVED_RESIDUAL": True,
+        "USE_AMP": USE_AMP,
+        "CHECK_SCENE_QUALITY_ALL_SCALES": CHECK_SCENE_QUALITY_ALL_SCALES,
+        "ADD_RANK_COLUMNS": ADD_RANK_COLUMNS,
     }
-
-    RUN_CONFIG_CACHE = run_config
-
-    run_config_path = OUTPUT_DIR / "sr_logs" / "run_config_train_only.json"
-    with open(run_config_path, "w", encoding="utf-8") as f:
+    RUN_CONFIG_CACHE = run_config.copy()
+    with open(OUTPUT_DIR / "sr_logs" / "run_config.json", "w", encoding="utf-8") as f:
         json.dump(run_config, f, ensure_ascii=False, indent=4)
 
-    print("\n====================================")
-    print("5-band Multispectral SR Training-only Pipeline")
-    print("Model training + checkpoint saving + train loss plots")
-    print("Evaluation is disabled in this script.")
     print("====================================")
-    print(f"Dataset    : {DATASET_DIR}")
-    print(f"Output     : {OUTPUT_DIR}")
-    print(f"Device     : {DEVICE}")
-    print(f"Scales     : {SCALES}")
-    print(f"Modes      : {EXPERIMENT_MODES}")
-    print(f"Methods    : {METHODS_TO_RUN}")
-    print(f"Epochs     : {EPOCHS}")
+    print("5-band Multispectral SR Pipeline")
+    print("Dynamic Patch/Tile + Clean Filtering | USER_SCALES-controlled evaluation")
+    print("Joint5ch/Bandwise + selected methods | checkpoint-based eval/train control")
+    print("Time + Extended Metrics + NoNorm MaskedLoss Version")
+    print("====================================")
+    print(f"Dataset : {DATASET_DIR}")
+    print(f"Output  : {OUTPUT_DIR}")
+    print(f"Checkpoint source: {CHECKPOINT_DIR}")
+    print(f"Device  : {DEVICE}")
+    print(f"Scales  : {SCALES}")
+    print(f"Modes   : {EXPERIMENT_MODES}")
+    print(f"Methods : {METHODS_TO_RUN}")
+    print(f"Joint methods   : {JOINT_METHODS_TO_RUN}")
+    print(f"Bandwise methods: {BANDWISE_METHODS_TO_RUN}")
+    n_joint_train = count_train_jobs_for_methods("joint5ch", JOINT_METHODS_TO_RUN) * len(SCALES) if RUN_JOINT_5CH else 0
+    n_band_train = count_train_jobs_for_methods("bandwise", BANDWISE_METHODS_TO_RUN) * len(SCALES) * len(BANDS) if RUN_BANDWISE_ABLATION else 0
+    n_eval_cases = len(SCALES) * (
+        (count_eval_cases_for_methods("joint5ch", JOINT_METHODS_TO_RUN) if RUN_JOINT_5CH else 0) +
+        (count_eval_cases_for_methods("bandwise", BANDWISE_METHODS_TO_RUN) if RUN_BANDWISE_ABLATION else 0)
+    )
+    print(f"Planned train jobs: joint={n_joint_train}, bandwise={n_band_train}, total={n_joint_train + n_band_train}")
+    print(f"Planned eval cases: {n_eval_cases}")
+    print(f"FastMode: {FAST_MODE}")
     print(f"Batch size : {BATCH_SIZE}")
-    print(f"Val patches: {VAL_PATCHES_PER_SCENE} per scene")
-    print(f"Save ckpt  : {SAVE_CHECKPOINT}")
+    print(f"Num workers: {NUM_WORKERS}")
+    print(f"Prefetch   : {PREFETCH_FACTOR}")
+    print(f"Input already normalized: {INPUT_ALREADY_NORMALIZED}")
+    print(f"Use npy cache: {USE_NPY_CACHE}, max items per worker: {NPY_CACHE_MAX_ITEMS}")
+    print(f"Fast startup scan: {FAST_STARTUP_SCAN}")
+    print(f"Max records for startup/test pool: {MAX_RECORDS_FOR_TEST}")
+    print(f"Eval record source: {EVAL_RECORD_SOURCE}")
+    print(f"Eval sample size : {EVAL_SAMPLE_SIZE}")
+    print(f"Eval sample random: {EVAL_SAMPLE_RANDOM}")
+    print(f"SwinIR inference tile: {SWINIR_TILE_LR_SIZE}, overlap: {SWINIR_TILE_OVERLAP}")
+    print(f"Compute global SSIM: {COMPUTE_GLOBAL_SSIM}")
+    print(f"Compute bandwise SSIM: {COMPUTE_BANDWISE_SSIM}")
+    print(f"Compute sharpness metrics: {COMPUTE_SHARPNESS_METRICS}")
+    print(f"Postprocess only: {POSTPROCESS_ONLY}")
+    print(f"Eval-only no train: {EVAL_ONLY_NO_TRAIN}")
+    print(f"Skip train if checkpoint exists: {SKIP_TRAIN_IF_CHECKPOINT_EXISTS}")
+    print(f"Skip eval if metrics exists: {SKIP_EVAL_IF_METRICS_EXISTS}")
+    print(f"Early stopping: {EARLY_STOPPING}, patience={PATIENCE}, min_delta={MIN_DELTA}")
+    print(f"AMP mixed precision: {USE_AMP}")
+    print(f"Check scene quality all scales: {CHECK_SCENE_QUALITY_ALL_SCALES}")
+    print(f"Nodata threshold: {NODATA_THRESHOLD}")
+    print(f"Scene quality filter: {ENABLE_SCENE_QUALITY_FILTER}, drop={DROP_BAD_SCENES}, min_valid={MIN_SCENE_VALID_RATIO}, max_lrup_hr_rmse={MAX_SCENE_LRUP_HR_RMSE}")
+    print("Clean-only evaluation: bad/abnormal scenes are excluded before sampling")
+    print(f"Patch quality filter: {ENABLE_PATCH_QUALITY_FILTER}, tries={PATCH_QUALITY_RANDOM_TRIES}, min_valid={MIN_PATCH_VALID_RATIO}, max_lrup_hr_rmse={MAX_PATCH_LRUP_HR_RMSE}")
     print(f"Residual SR: {USE_RESIDUAL_SR}")
-    print(f"Start      : {now_string()}")
+    print(f"Sharpness loss: {USE_SHARPNESS_LOSS}")
+    print(f"Loss weights: L1={L1_WEIGHT}, Charb={CHARBONNIER_WEIGHT}, SSIM={SSIM_WEIGHT}, Grad={GRAD_WEIGHT}, Edge={EDGE_WEIGHT}, Freq={FREQ_WEIGHT}, SAM={SAM_WEIGHT}, VI={VI_WEIGHT}")
+    print(f"Run loss ablation: {RUN_LOSS_ABLATION}")
+    print(f"Loss ablation methods: {LOSS_ABLATION_METHODS}")
+    print(f"Loss ablation modes: {LOSS_ABLATION_MODES}")
+    print(f"Loss ablation profiles: {LOSS_ABLATION_PROFILE_IDS}")
+    print(f"Start   : {now_string()}")
     print("====================================")
+
+    if POSTPROCESS_ONLY:
+        print("[INFO] POSTPROCESS_ONLY=True: 기존 metrics/train_history CSV만 사용해 summary 엑셀을 재생성합니다.")
+        all_metric_rows = collect_existing_metric_rows()
+        if len(all_metric_rows) == 0:
+            raise RuntimeError("POSTPROCESS_ONLY=True but no existing metrics_*.csv files were found.")
+        save_total_metrics(all_metric_rows)
+        merge_train_history_files()
+        print("[INFO] Postprocess-only summary regeneration finished.")
+        return
 
     records = read_scene_index()
+
     update_dynamic_sizes(records)
 
-    train_records, val_records, test_records_unused = split_records(records)
+    if len(records) < 5:
+        raise RuntimeError(
+            "Valid clean records are too few. "
+            "Check HR_path, LR_x2_path, LR_x3_path, LR_x4_path, and NaN/Inf."
+        )
 
-    # 평가 전용 sample selection은 수행하지 않습니다.
-    # test_records_unused는 split 확인용으로만 생성됩니다.
-    print("\n====================================")
-    print("Training-only split summary")
-    print("====================================")
-    print(f"Train records: {len(train_records)}")
-    print(f"Val records  : {len(val_records)}")
-    print(f"Test records : {len(test_records_unused)}  [not used]")
-    print("====================================")
+    train_records, val_records, test_records = split_records(records)
 
-    all_training_jobs = []
+    # 평가 대상은 여기서 한 번만 결정합니다.
+    # 기본값: test split에서 100장을 랜덤 선택.
+    test_records = select_eval_records(records, test_records)
+
+    all_metric_rows = []
 
     for scale in SCALES:
         print("\n####################################")
-        print(f"Training scale x{scale}")
+        print(f"Scale x{scale}")
         print("####################################")
 
         if RUN_JOINT_5CH:
-            mode = "joint5ch"
-
             for method in JOINT_METHODS_TO_RUN:
+                mode = "joint5ch"
+
+                for loss_profile_id in get_loss_profile_ids_for_case(mode, method):
+                    set_current_loss_profile(loss_profile_id)
+                    method_start_time = time.perf_counter()
+                    case_method = get_case_method_name(method)
+                    loss_profile_label = get_loss_profile_label()
+
+                    print("\n------------------------------------")
+                    print(f"Method: {case_method}, Scale: x{scale}, Mode: {mode}")
+                    print(f"Loss profile: {loss_profile_label}")
+                    print("------------------------------------")
+
+                    print("\n************************************")
+                    print(f"Run {mode}: {case_method} x{scale}")
+                    print("************************************")
+
+                    if should_skip_eval(mode, method, scale):
+                        metric_rows = load_existing_metric_csv(mode, method, scale) if LOAD_EXISTING_METRICS_WHEN_SKIP_EVAL else []
+                        all_metric_rows.extend(metric_rows)
+                        print(f"[INFO] Skip whole case because metrics already exist: {mode} {case_method} x{scale}")
+                        continue
+
+                    if method == "bicubic":
+                        model = None
+                    elif EVAL_ONLY_NO_TRAIN:
+                        model = load_trained_model_from_checkpoint(
+                            method=method,
+                            scale=scale,
+                            mode=mode,
+                            channels=5
+                        )
+                        if model is None:
+                            print(
+                                f"[WARN] Checkpoint not found. Skip evaluation without training: "
+                                f"mode={mode}, method={case_method}, scale=x{scale}"
+                            )
+                            continue
+                    elif method == "esrgan":
+                        model = train_esrgan(
+                            scale=scale,
+                            train_records=train_records,
+                            val_records=val_records,
+                            mode=mode,
+                            channels=5
+                        )
+                    else:
+                        model = train_standard_model(
+                            method=method,
+                            scale=scale,
+                            train_records=train_records,
+                            val_records=val_records,
+                            mode=mode,
+                            channels=5
+                        )
+
+                    metric_rows = evaluate_joint5ch(
+                        method=method,
+                        scale=scale,
+                        model=model,
+                        test_records=test_records
+                    )
+                    all_metric_rows.extend(metric_rows)
+
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+
+                    method_time = time.perf_counter() - method_start_time
+                    print("\n------------------------------------")
+                    print(f"Finished mode={mode}, method={case_method}, scale=x{scale}")
+                    print(f"Elapsed: {format_seconds(method_time)}")
+                    print("------------------------------------")
+
+        if RUN_BANDWISE_ABLATION:
+            for method in BANDWISE_METHODS_TO_RUN:
+                mode = "bandwise"
+                set_current_loss_profile(DEFAULT_LOSS_PROFILE_ID)
+                method_start_time = time.perf_counter()
+
                 print("\n------------------------------------")
-                print(f"Train-only job: mode={mode}, method={method}, scale=x{scale}")
+                print(f"Method: {method}, Scale: x{scale}, Mode: {mode}")
                 print("------------------------------------")
 
-                if method == "bicubic":
-                    print("[INFO] Bicubic has no trainable parameters. Skip training.")
+                print("\n************************************")
+                print(f"Run {mode}: {method} x{scale}")
+                print("************************************")
+
+                if should_skip_eval(mode, method, scale):
+                    metric_rows = load_existing_metric_csv(mode, method, scale) if LOAD_EXISTING_METRICS_WHEN_SKIP_EVAL else []
+                    all_metric_rows.extend(metric_rows)
+                    print(f"[INFO] Skip whole case because metrics already exist: {mode} {method} x{scale}")
                     continue
 
-                if method == "esrgan":
-                    model = train_esrgan(
-                        scale=scale,
-                        train_records=train_records,
-                        val_records=val_records,
-                        mode=mode,
-                        channels=5
-                    )
+                if method == "bicubic":
+                    models = {band_name: None for band_name in BANDS}
+                elif EVAL_ONLY_NO_TRAIN:
+                    models = {}
+                    missing_bands = []
+                    for band_index, band_name in enumerate(BANDS):
+                        loaded_model = load_trained_model_from_checkpoint(
+                            method=method,
+                            scale=scale,
+                            mode=mode,
+                            channels=1,
+                            band_index=band_index,
+                            band_name=band_name
+                        )
+                        if loaded_model is None:
+                            missing_bands.append(band_name)
+                        else:
+                            models[band_name] = loaded_model
+
+                    if len(missing_bands) > 0:
+                        print(
+                            f"[WARN] Bandwise checkpoint missing. Skip evaluation without training: "
+                            f"mode={mode}, method={method}, scale=x{scale}, missing={missing_bands}"
+                        )
+                        continue
                 else:
-                    model = train_standard_model(
+                    models = train_bandwise_models(
                         method=method,
                         scale=scale,
                         train_records=train_records,
-                        val_records=val_records,
-                        mode=mode,
-                        channels=5
+                        val_records=val_records
                     )
 
-                all_training_jobs.append({
-                    "scale": scale,
-                    "mode": mode,
-                    "method": method,
-                    "band": "all",
-                    "datetime": now_string(),
-                })
-
-                del model
-
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-
-        if RUN_BANDWISE_ABLATION:
-            mode = "bandwise"
-
-            for method in BANDWISE_METHODS_TO_RUN:
-                print("\n------------------------------------")
-                print(f"Train-only job: mode={mode}, method={method}, scale=x{scale}")
-                print("------------------------------------")
-
-                if method == "bicubic":
-                    print("[INFO] Bicubic has no trainable parameters. Skip training.")
-                    continue
-
-                models = train_bandwise_models(
+                metric_rows = evaluate_bandwise(
                     method=method,
                     scale=scale,
-                    train_records=train_records,
-                    val_records=val_records
+                    models=models,
+                    test_records=test_records
                 )
-
-                for band_name in BANDS:
-                    all_training_jobs.append({
-                        "scale": scale,
-                        "mode": mode,
-                        "method": method,
-                        "band": band_name,
-                        "datetime": now_string(),
-                    })
-
-                del models
+                all_metric_rows.extend(metric_rows)
 
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
 
-    if len(all_training_jobs) > 0:
-        train_job_csv = OUTPUT_DIR / "sr_logs" / "train_only_jobs_completed.csv"
-        write_dict_csv(train_job_csv, all_training_jobs)
+                method_time = time.perf_counter() - method_start_time
+                print("\n------------------------------------")
+                print(f"Finished mode={mode}, method={method}, scale=x{scale}")
+                print(f"Elapsed: {format_seconds(method_time)}")
+                print("------------------------------------")
+
+    save_total_metrics(all_metric_rows)
 
     merge_train_history_files()
-    plot_training_loss_curves_from_history()
 
-    total_time_sec = time.perf_counter() - total_start_time
+    total_elapsed = time.perf_counter() - total_start_time
 
-    total_summary = {
-        "RUN_NAME": RUN_NAME,
-        "OUTPUT_DIR": str(OUTPUT_DIR),
-        "SCALES": SCALES,
-        "MODES": EXPERIMENT_MODES,
-        "METHODS": METHODS_TO_RUN,
-        "TRAIN_ONLY_NO_EVAL": True,
-        "TOTAL_TIME_SEC": total_time_sec,
-        "TOTAL_TIME_HMS": format_seconds(total_time_sec),
-        "END_TIME": now_string(),
-    }
+    run_summary = [{
+        "dataset": str(DATASET_DIR),
+        "output_dir": str(OUTPUT_DIR),
+        "run_name": RUN_NAME,
+        "device": DEVICE,
+        "scales": str(SCALES),
+        "modes": str(EXPERIMENT_MODES),
+        "methods": str(METHODS_TO_RUN),
+        "joint_methods": str(JOINT_METHODS_TO_RUN),
+        "bandwise_methods": str(BANDWISE_METHODS_TO_RUN),
+        "USE_RESIDUAL_SR": USE_RESIDUAL_SR,
+        "USE_SHARPNESS_LOSS": USE_SHARPNESS_LOSS,
+        "L1_WEIGHT": L1_WEIGHT,
+        "CHARBONNIER_WEIGHT": CHARBONNIER_WEIGHT,
+        "SSIM_WEIGHT": SSIM_WEIGHT,
+        "GRAD_WEIGHT": GRAD_WEIGHT,
+        "FREQ_WEIGHT": FREQ_WEIGHT,
+        "EDGE_WEIGHT": EDGE_WEIGHT,
+        "SAM_WEIGHT": SAM_WEIGHT,
+        "VI_WEIGHT": VI_WEIGHT,
+        "RUN_LOSS_ABLATION": RUN_LOSS_ABLATION,
+        "LOSS_ABLATION_METHODS": str(LOSS_ABLATION_METHODS),
+        "LOSS_ABLATION_MODES": str(LOSS_ABLATION_MODES),
+        "LOSS_ABLATION_PROFILE_IDS": str(LOSS_ABLATION_PROFILE_IDS),
+        "total_records": len(records),
+        "train_records": len(train_records),
+        "val_records": len(val_records),
+        "test_records": len(test_records),
+        "HR_PATCH_SIZE": HR_PATCH_SIZE,
+        "TILE_LR_SIZE": TILE_LR_SIZE,
+        "TILE_OVERLAP": TILE_OVERLAP,
+        "BATCH_SIZE": BATCH_SIZE,
+        "NUM_WORKERS": NUM_WORKERS,
+        "PIN_MEMORY": PIN_MEMORY,
+        "PERSISTENT_WORKERS": PERSISTENT_WORKERS,
+        "PREFETCH_FACTOR": PREFETCH_FACTOR,
+        "INPUT_ALREADY_NORMALIZED": INPUT_ALREADY_NORMALIZED,
+        "USE_NPY_CACHE": USE_NPY_CACHE,
+        "NPY_CACHE_MAX_ITEMS": NPY_CACHE_MAX_ITEMS,
+        "FAST_STARTUP_SCAN": FAST_STARTUP_SCAN,
+        "MAX_RECORDS_FOR_TEST": MAX_RECORDS_FOR_TEST,
+        "EVAL_RECORD_SOURCE": EVAL_RECORD_SOURCE,
+        "EVAL_SAMPLE_SIZE": EVAL_SAMPLE_SIZE,
+        "EVAL_SAMPLE_RANDOM": EVAL_SAMPLE_RANDOM,
+        "SWINIR_TILE_LR_SIZE": SWINIR_TILE_LR_SIZE,
+        "SWINIR_TILE_OVERLAP": SWINIR_TILE_OVERLAP,
+        "COMPUTE_GLOBAL_SSIM": COMPUTE_GLOBAL_SSIM,
+        "COMPUTE_BANDWISE_SSIM": COMPUTE_BANDWISE_SSIM,
+        "COMPUTE_SHARPNESS_METRICS": COMPUTE_SHARPNESS_METRICS,
+        "POSTPROCESS_ONLY": POSTPROCESS_ONLY,
+        "SKIP_TRAIN_IF_CHECKPOINT_EXISTS": SKIP_TRAIN_IF_CHECKPOINT_EXISTS,
+        "SKIP_EVAL_IF_METRICS_EXISTS": SKIP_EVAL_IF_METRICS_EXISTS,
+        "EARLY_STOPPING": EARLY_STOPPING,
+        "PATIENCE": PATIENCE,
+        "MIN_DELTA": MIN_DELTA,
+        "USE_AMP": USE_AMP,
+        "CHECK_SCENE_QUALITY_ALL_SCALES": CHECK_SCENE_QUALITY_ALL_SCALES,
+        "ADD_RANK_COLUMNS": ADD_RANK_COLUMNS,
+        "total_elapsed_sec": total_elapsed,
+        "total_elapsed_hms": format_seconds(total_elapsed),
+        "finished_datetime": now_string(),
+    }]
 
-    total_summary_path = OUTPUT_DIR / "sr_logs" / "train_only_total_summary.json"
-    with open(total_summary_path, "w", encoding="utf-8") as f:
-        json.dump(total_summary, f, ensure_ascii=False, indent=4)
+    run_summary_csv = OUTPUT_DIR / "sr_logs" / "run_time_summary.csv"
+    write_dict_csv(run_summary_csv, run_summary)
 
     print("\n====================================")
-    print("Training-only pipeline finished")
+    print("All Done")
     print("====================================")
-    print(f"Total time : {format_seconds(total_time_sec)}")
-    print(f"Output     : {OUTPUT_DIR}")
-    print(f"Loss plots : {OUTPUT_DIR / 'sr_logs' / 'train_loss_plots'}")
-    print("Evaluation : skipped")
+    print(f"Output folder: {OUTPUT_DIR}")
+    print(f"Logs         : {OUTPUT_DIR / 'sr_logs'}")
+    print(f"Final HR_PATCH_SIZE = {HR_PATCH_SIZE}")
+    print(f"Final TILE_LR_SIZE  = {TILE_LR_SIZE}")
+    print(f"Final TILE_OVERLAP  = {TILE_OVERLAP}")
+    print(f"Total elapsed       = {format_seconds(total_elapsed)}")
     print("====================================")
 
 
