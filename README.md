@@ -1,28 +1,46 @@
-# UAV Multispectral Super-Resolution
+# UAV Multispectral Super-Resolution Benchmark
 
-This repository provides a PyTorch-based pipeline for constructing 5-band multispectral UAV image cubes and training super-resolution (SR) models for agricultural remote sensing imagery.
+This repository provides the PyTorch code used for the revised manuscript **"Spectral-Consistency-Aware Evaluation of Deep Super-Resolution Methods for UAV Five-Band Multispectral Crop Imagery"** submitted to *Remote Sensing*.
 
-The workflow consists of two main steps:
+The code evaluates super-resolution (SR) methods for five-band UAV multispectral crop imagery with explicit attention to spatial reconstruction quality, spectral consistency, vegetation-index preservation, computational efficiency, and reviewer-requested robustness checks.
 
-1. **Dataset construction**
-   Stack raw Blue, Green, Red, RedEdge, and NIR TIFF images into 5-band HR cubes and generate LR cubes for ×2, ×3, and ×4 SR experiments.
+## What This Release Contains
 
-2. **Model training**
-   Train multispectral super-resolution models using either joint 5-channel learning or band-wise learning.
+This release is the **revision benchmark and figure-generation code**. It assumes that the five-band HR/LR cube dataset has already been prepared as `.npy` files. Raw AI Hub TIFF parsing and cube-building scripts are not included in this release.
 
----
+Main capabilities:
 
-## Overview
+- Joint five-channel SR and band-wise SR evaluation
+- SR scales x2, x3, and x4
+- Bicubic, SRCNN, EDSR, RCAN, SwinIR-based SR, ESRGAN-based SR, HAT-based SR, and DAT-based SR
+- Revision experiments for loss-confounding, parameter capacity, degradation robustness, noise robustness, standard PSNR, excluded-scene reporting, and clipped vegetation-index errors
+- Figure generation for RMSE boxplots, RGB/false-color grids, and NDVI/GNDVI/NDRE error maps
 
-This project was designed for UAV-based agricultural multispectral imagery.
+## Data
 
-The input data consist of five spectral bands:
+The study uses the AI Hub dataset:
+
+**Field Crop (Cabbage, etc.) Growth Condition Data**  
+Dataset code: **71484**  
+URL: https://aihub.or.kr/aihubdata/data/view.do?dataSetSn=71484
+
+The AI Hub dataset is **not redistributed** in this repository. Users must download the data directly from AI Hub and follow the AI Hub data-use policy. Preprocessed cubes, model checkpoints, and generated outputs are also excluded because they are large derived artifacts.
+
+## Expected Preprocessed Dataset
+
+`Final_version5_revision.py` expects a preprocessed dataset directory like this:
 
 ```text
-Blue, Green, Red, RedEdge, NIR
+light_cabbage_training_dataset/
+  index/
+    scene_index.csv
+  HR_npy/
+  LR_x2_npy/
+  LR_x3_npy/
+  LR_x4_npy/
 ```
 
-The generated cube format is:
+Each HR cube is expected to have shape:
 
 ```text
 (H, W, 5)
@@ -38,60 +56,52 @@ cube[:, :, 3] = RedEdge
 cube[:, :, 4] = NIR
 ```
 
----
+A template for the scene-index format is provided as `scene_index_template.csv`. The main pipeline reads the actual index from:
+
+```text
+DATASET_DIR/index/scene_index.csv
+```
+
+If the exact manuscript split can be redistributed, place the final `scene_index.csv` in the dataset `index/` folder and, optionally, add a copy to the repository. If it cannot be redistributed, keep the template and document how the split was regenerated from the AI Hub-derived preprocessed dataset using the fixed seed and filtering rules in the pipeline.
 
 ## Repository Structure
 
 ```text
 .
-├── README.md
-├── requirements.txt
-├── .gitignore
-├── build_light_cabbage_gangwon_dataset.py
-└── train_sr_all_crops_Joint_5ch_x234_SR.py
+|-- Final_version5_revision.py
+|-- Make_NDVI_hat_dat.py
+|-- make_rgb_grids_hat_dat.py
+|-- make_fig2_boxplot.py
+|-- requirements.txt
+|-- scene_index_template.csv
+|-- CITATION.cff
+|-- LICENSE
+|-- README.md
+|-- README_REVISION.md
+|-- RELEASE_CHECKLIST.md
+|-- .gitignore
+`-- .gitattributes
 ```
-
----
 
 ## Main Scripts
 
-| File                                      | Description                                                                    |
-| ----------------------------------------- | ------------------------------------------------------------------------------ |
-| `build_light_cabbage_gangwon_dataset.py`  | Builds the 5-band HR/LR cube dataset from raw TIFF files and JSON annotations. |
-| `train_sr_all_crops_Joint_5ch_x234_SR.py` | Trains multispectral SR models using the generated HR/LR cube dataset.         |
-
----
-
-## Dataset
-
-This project uses the AIHub open dataset:
-
-**Dataset name:** 노지작물(배추 등) 작황 데이터
-**Provider:** AIHub / NIA
-**Dataset URL:** https://aihub.or.kr/aihubdata/data/view.do?dataSetSn=71484
-
-The original dataset is not included in this repository because of file size and dataset license restrictions.
-Users should download the dataset directly from AIHub and follow the AIHub data usage policy.
-
-After downloading, the expected source data structure is:
-
-```text
-107.노지작물(배추 등) 작황 데이터/
-└── 01-1.정식개방데이터/
-    └── Training/
-        ├── 01.원천데이터/
-        │   └── TS_1.배추_1.강원도/
-        └── 02.라벨링데이터/
-            └── TL_1.배추_1.강원도/
-```
-
----
+| File | Purpose |
+|---|---|
+| `Final_version5_revision.py` | Main training/evaluation pipeline for the manuscript revision experiments |
+| `Make_NDVI_hat_dat.py` | Generates single-scene NDVI, GNDVI, and NDRE error-map outputs with HAT/DAT |
+| `make_rgb_grids_hat_dat.py` | Generates RGB, false-color, and zoom comparison grids with HAT/DAT columns |
+| `make_fig2_boxplot.py` | Generates the x4 band-wise per-scene RMSE boxplot from saved metric CSV files |
+| `scene_index_template.csv` | Example scene-index schema; not the manuscript split itself |
+| `RELEASE_CHECKLIST.md` | Checklist for making the GitHub repository public |
+| `CITATION.cff` | Citation metadata template |
 
 ## Installation
 
-Create a Python environment and install the required packages:
+Create a Python environment and install dependencies:
 
 ```bash
+python -m venv .venv
+.venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
@@ -100,14 +110,10 @@ Recommended environment:
 ```text
 Python >= 3.10
 PyTorch >= 2.0
-CUDA-enabled GPU recommended
+CUDA-enabled GPU recommended for training and inference
 ```
 
----
-
-## Requirements
-
-The main dependencies are:
+Main dependencies are listed in `requirements.txt`:
 
 ```text
 numpy
@@ -115,202 +121,156 @@ pandas
 opencv-python
 torch
 torchvision
+scikit-image
 matplotlib
 openpyxl
-scikit-image
-tqdm
 Pillow
 tifffile
+tqdm
 ```
 
----
+## Configure Paths
 
-## Step 1. Build the 5-Band Cube Dataset
-
-Before training SR models, generate HR and LR cube datasets from the raw TIFF files.
-
-Open `build_light_cabbage_gangwon_dataset.py` and modify the following paths:
+Before running, edit the path settings near the top of `Final_version5_revision.py`:
 
 ```python
-RAW_ROOT = Path("path/to/Training/01.원천데이터/TS_1.배추_1.강원도")
-LABEL_ROOT = Path("path/to/Training/02.라벨링데이터/TL_1.배추_1.강원도")
-OUT_ROOT = Path("./light_cabbage_gangwon_dataset")
+DATASET_DIR = Path("/path/to/data/light_cabbage_training_dataset")
+OUTPUT_ROOT = Path("/path/to/results")
+RUN_NAME = "your_run_name"
+CHECKPOINT_RUN_NAME = "existing_checkpoint_run_if_reusing_models"
+```
+
+The current script defaults are placeholders or internal run names. They should be changed for a clean reproduction run.
+
+For the figure scripts, also edit the path settings near the top of each file:
+
+```python
+# Make_NDVI_hat_dat.py and make_rgb_grids_hat_dat.py
+DATASET_DIR = Path("/path/to/data/light_cabbage_training_dataset")
+CHECKPOINT_DIR = Path("/path/to/checkpoints")
+OUTPUT_DIR = Path("/path/to/single_scene_outputs")
+
+# make_fig2_boxplot.py
+METRICS_DIR = "/path/to/results/<run_name>/sr_logs"
+```
+
+## Running the Main Benchmark
+
+Choose an experiment preset and SR scales in `Final_version5_revision.py`:
+
+```python
+EXPERIMENT_PRESET = "revision_experiments"
+USER_SCALES = [2, 3, 4]
 ```
 
 Then run:
 
 ```bash
-python build_light_cabbage_gangwon_dataset.py
+python Final_version5_revision.py
 ```
 
----
-
-## Dataset Builder Output
-
-The builder generates the following dataset structure:
-
-```text
-light_cabbage_gangwon_dataset/
-├── index/
-│   └── scene_index.csv
-├── HR_npy/
-├── LR_x2_npy/
-├── LR_x3_npy/
-├── LR_x4_npy/
-├── masks/
-├── rgb_preview/
-├── false_color/
-├── overlay/
-├── metadata/
-└── logs/
-```
-
-### Generated Files
-
-| Folder                  | Description                                                 |
-| ----------------------- | ----------------------------------------------------------- |
-| `HR_npy/`               | Original 5-band HR cubes.                                   |
-| `LR_x2_npy/`            | ×2 low-resolution cubes.                                    |
-| `LR_x3_npy/`            | ×3 low-resolution cubes.                                    |
-| `LR_x4_npy/`            | ×4 low-resolution cubes.                                    |
-| `masks/`                | Binary masks generated from JSON polygon annotations.       |
-| `rgb_preview/`          | RGB preview images for visualization.                       |
-| `false_color/`          | False-color preview images using NIR, Red, and Green bands. |
-| `overlay/`              | Annotation overlay preview images.                          |
-| `metadata/`             | Scene-level metadata files.                                 |
-| `index/scene_index.csv` | Main index file used by the training script.                |
-
----
-
-## Step 2. Train Super-Resolution Models
-
-After building the dataset, open `train_sr_all_crops_Joint_5ch_x234_SR.py` and modify the dataset/output paths:
+The file currently uses:
 
 ```python
-DATASET_DIR = Path("./light_cabbage_gangwon_dataset")
-OUTPUT_ROOT = Path("./outputs")
+EXPERIMENT_PRESET = "full_eval"
+USER_SCALES = [4]
 ```
 
-Choose the SR scale:
+Those defaults are useful for a narrower evaluation run, but the manuscript revision experiments should be run with the presets below.
 
-```python
-USER_SCALES = [2]        # Train x2 only
-USER_SCALES = [3]        # Train x3 only
-USER_SCALES = [4]        # Train x4 only
-USER_SCALES = [2, 3, 4]  # Train all scales
-```
+## Revision Experiment Presets
 
-Run training:
+| Experiment | Setting |
+|---|---|
+| Main revision comparison with HAT/DAT, EDSR-wide, A1 loss-confounding check, B3 noise evaluation, and D1/D2/D3 outputs | `EXPERIMENT_PRESET = "revision_experiments"`, `USER_SCALES = [2, 3, 4]` |
+| Gaussian-blur plus bicubic degradation robustness | `EXPERIMENT_PRESET = "degradation_b2"`, `DEGRADATION_MODE = "blur_bicubic"`, `USER_SCALES = [4]` |
+| HAT/DAT loss-term ablation at x4 | `EXPERIMENT_PRESET = "loss_ablation_hatdat"`, `USER_SCALES = [4]` |
+| HAT-only noise robustness rows at x4 | `EXPERIMENT_PRESET = "noise_hat"`, `USER_SCALES = [4]` |
 
-```bash
-python train_sr_all_crops_Joint_5ch_x234_SR.py
-```
+Implemented revision components:
 
----
+- `hat` and `dat`: recent attention-based SR baselines
+- `spatial_no_spectral`: joint model trained without SAM and VI losses to separate reconstruction mode from spectral-loss effects
+- `edsr_wide`: widened joint EDSR matched to the band-wise parameter budget
+- `DEGRADATION_MODE = "blur_bicubic"`: Gaussian blur followed by bicubic downsampling
+- `EVAL_NOISE_SIGMAS`: additive Gaussian noise on x4 LR test inputs
+- `PSNR_std`: standard PSNR with peak value 1.0, reported alongside scene-dependent PSNR
+- `excluded_scenes_report.csv`: records excluded by the RMSE >= 1 rule
+- `*_MAE_clip01`: vegetation-index errors after clipping reflectance to [0, 1]
 
 ## Supported SR Models
 
-The training script supports the following SR methods:
+| Method | Description |
+|---|---|
+| `bicubic` | Non-learning interpolation baseline |
+| `srcnn` | Shallow CNN baseline |
+| `edsr` | Enhanced Deep Super-Resolution model |
+| `rcan` | Residual Channel Attention Network |
+| `swinir` | Compact SwinIR-based SR baseline |
+| `esrgan` | ESRGAN-based adversarial SR baseline |
+| `hat` | HAT-based attention SR baseline added in the revision |
+| `dat` | DAT-based attention SR baseline added in the revision |
+| `edsr_wide` | Parameter-matched widened joint EDSR for the capacity check |
 
-| Method      | Description                             |
-| ----------- | --------------------------------------- |
-| Bicubic     | Non-learning interpolation baseline.    |
-| SRCNN       | CNN-based baseline SR model.            |
-| EDSR        | Enhanced Deep Super-Resolution model.   |
-| RCAN        | Residual Channel Attention Network.     |
-| SwinIR-like | Lightweight Transformer-based SR model. |
-| ESRGAN-like | GAN-based SR model.                     |
+## Training and Evaluation Modes
 
----
+| Mode | Description |
+|---|---|
+| `joint5ch` | One model processes all five spectral bands jointly |
+| `bandwise` | One independent single-channel model is trained per spectral band |
 
-## Training Modes
+For x3, HR is center-cropped to the natural `LR * 3` grid because 800 pixels is not exactly divisible by 3. The x3 condition is treated as diagnostic; x2 and x4 are the cleaner scales for model ranking.
 
-Two training modes are supported:
+## Figure Generation
 
-| Mode       | Description                                              |
-| ---------- | -------------------------------------------------------- |
-| `joint5ch` | Trains one model using all five spectral bands together. |
-| `bandwise` | Trains separate models for each spectral band.           |
+After the metric CSVs, checkpoints, and single-scene SR outputs exist, run:
 
----
-
-## Output Structure
-
-Training results are saved under:
-
-```text
-OUTPUT_ROOT/RUN_NAME/
-├── sr_checkpoints/
-└── sr_logs/
-    ├── train_history_*.csv
-    ├── train_history_all.csv
-    ├── train_history_all.xlsx
-    ├── run_config*.json
-    └── train_loss_plots/
+```bash
+python make_fig2_boxplot.py
+python Make_NDVI_hat_dat.py
+python make_rgb_grids_hat_dat.py
 ```
 
-### Main Outputs
+Figure scripts are intentionally separated from the main benchmark so that manuscript figures can be regenerated without rerunning the full training pipeline.
 
-| Output                   | Description                              |
-| ------------------------ | ---------------------------------------- |
-| `sr_checkpoints/`        | Trained model checkpoints.               |
-| `train_history_*.csv`    | Per-model training history.              |
-| `train_history_all.csv`  | Merged training history.                 |
-| `train_history_all.xlsx` | Excel summary of all training histories. |
-| `train_loss_plots/`      | Training loss curve images.              |
-| `run_config*.json`       | Run configuration log.                   |
+## Outputs
 
----
-
-## Notes on Large Files
-
-The following files and folders are intentionally excluded from this repository:
+Typical outputs under `OUTPUT_ROOT/RUN_NAME/` include:
 
 ```text
-*.npy
-*.tif
-*.tiff
-*.raw
-*.hdr
-*.bsq
-*.bil
-*.bip
-*.pth
-*.pt
 sr_checkpoints/
 sr_logs/
-outputs/
-results/
+sr_preview/
+sr_diff_map/
 ```
 
-Please use `.gitignore` to prevent accidental upload of large datasets, generated cubes, checkpoints, and result files.
+Important log/result files include:
 
----
+```text
+train_history_*.csv
+train_history_all.csv
+train_history_all.xlsx
+run_config*.json
+metrics_*_x*.csv
+excluded_scenes_report.csv
+bad_scene_quality_filter.csv
+skipped_nan_inf_records.csv
+```
+
+Large generated artifacts are intentionally ignored by Git, including `.npy`, `.pth`, `.pt`, `.ckpt`, `.png`, `.tif`, `sr_checkpoints/`, `sr_logs/`, and `*_SR_RESULTS/`.
 
 ## Reproducibility Notes
 
-* The dataset builder crops all bands to a common minimum size before stacking.
-* The band order is fixed as `Blue, Green, Red, RedEdge, NIR`.
-* LR cubes are generated from HR cubes using OpenCV area interpolation.
-* The training script supports ×2, ×3, and ×4 SR.
-* For ×3 SR, HR and LR grids may not be perfectly divisible, so HR images are center-cropped to match the natural `LR × scale` size during training.
-* Preview images are percentile-stretched only for visualization. The `.npy` cube values are not normalized by the preview process.
+- Fixed random seed: 42
+- LR cubes are generated from HR cubes using OpenCV area interpolation unless a different degradation mode is selected
+- Invalid NaN/Inf records and quality-filtered scenes are excluded before splitting
+- The fixed scene-quality scale set is controlled by `SCENE_QUALITY_SCALES = [2, 3, 4]` so different revision runs use the same valid-record pool
+- Test evaluation uses the held-out test split by default
+- Records with `RMSE >= 1` are excluded from paper summaries and written to `excluded_scenes_report.csv`
+- Vegetation-index metrics include NDVI, GNDVI, and NDRE
 
----
+## Citation and Acknowledgement
 
-## Citation / Acknowledgement
+If you use this code, please cite the associated manuscript and acknowledge AI Hub dataset code 71484 according to the AI Hub usage policy.
 
-This project uses the AIHub dataset **노지작물(배추 등) 작황 데이터**.
-
-Users should cite or acknowledge AIHub according to the dataset usage policy.
-
-If you use this code in your research, please cite the corresponding paper or repository when available.
-
----
-
-## License
-
-This repository is intended for research and educational purposes.
-
-The dataset license follows the AIHub data usage policy.
-Please check the original AIHub dataset page before redistributing or using the data commercially.
+The code is released under the MIT License. The AI Hub dataset is not covered by this license and must be obtained directly from AI Hub.
