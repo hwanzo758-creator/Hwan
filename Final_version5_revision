@@ -122,7 +122,7 @@ SCENE_INDEX_PATH = DATASET_DIR / "index" / "scene_index.csv"
 # 입력 데이터(DATASET_DIR)는 그대로 두고, 결과 저장 위치만 별도로 분리합니다.
 # 원하는 저장 위치로 OUTPUT_ROOT만 바꾸면 됩니다.
 OUTPUT_ROOT = Path(
-    "/path/to/data/light_cabbage_training_dataset_SR_RESULTS"
+    "/path/to/results"
 )
 
 # 실행별 결과를 분리하고 싶으면 RUN_NAME을 바꾸세요.
@@ -338,15 +338,15 @@ PRESETS = {
 
     # ========================================================
     # REVISION B2 (R3 #4): degradation-robustness run. Use together with
-    # DEGRADATION_MODE="blur_bicubic" and USER_SCALES=[4]. Runs ONLY the two
-    # representative models (EDSR, RCAN) in joint + band-wise, with the loss
-    # ablation (A1) and noise (B3) disabled — those belong to the area run.
-    # Outputs auto-isolate to a "*_blur_bicubic" folder.
+    # DEGRADATION_MODE="blur_bicubic" and USER_SCALES=[4]. Runs one representative
+    # per model family — CNN (EDSR, RCAN) and Transformer (HAT) — in joint +
+    # band-wise, with the loss ablation (A1) and noise (B3) disabled (those belong
+    # to the area run). Outputs auto-isolate to a "*_blur_bicubic" folder.
     # ========================================================
     "degradation_b2": {
         "FAST_MODE": False,
-        "JOINT_METHODS_TO_RUN": ["bicubic", "edsr", "rcan"],
-        "BANDWISE_METHODS_TO_RUN": ["bicubic", "edsr", "rcan"],
+        "JOINT_METHODS_TO_RUN": ["bicubic", "edsr", "rcan", "hat"],
+        "BANDWISE_METHODS_TO_RUN": ["bicubic", "edsr", "rcan", "hat"],
         "RUN_JOINT_5CH": True,
         "RUN_BANDWISE_ABLATION": True,
         "EPOCHS": 50,
@@ -391,6 +391,46 @@ PRESETS = {
         "SAVE_DIFF_MAP": True,
         "SAVE_CHECKPOINT": True,
         "MAX_PREVIEW_PER_METHOD": 5,
+    },
+
+    # REVISION (Table 7): loss-term ablation for the two added transformer
+    # baselines (HAT, DAT), joint five-channel at USER_SCALES=[4]. Trains each
+    # under L1, L1+SAM, and L1+SAM+VI so their rows can be appended to the
+    # existing Section 3.6 loss-ablation table (Table 7) in the same format as
+    # the other models. Band-wise and B3 noise are off; the full-loss baseline
+    # is excluded (already reported in the main comparison).
+    "loss_ablation_hatdat": {
+        "FAST_MODE": False,
+        "JOINT_METHODS_TO_RUN": ["hat", "dat"],
+        "BANDWISE_METHODS_TO_RUN": [],
+        "RUN_JOINT_5CH": True,
+        "RUN_BANDWISE_ABLATION": False,
+        "EPOCHS": 50,
+        "PATCHES_PER_EPOCH": 1000,
+        "SAVE_SR_NPY": False,
+        "SAVE_PREVIEW": True,
+        "SAVE_DIFF_MAP": True,
+        "SAVE_CHECKPOINT": True,
+        "MAX_PREVIEW_PER_METHOD": 5,
+    },
+
+    # REVISION (Table 9, B3): noise-robustness eval for the Transformer
+    # representative (HAT) only. No training/main eval — just the additive-noise
+    # evaluation on the existing HAT joint five-channel ×4 checkpoint, so the HAT
+    # rows can be appended to the existing EDSR/RCAN/ESRGAN noise table.
+    "noise_hat": {
+        "FAST_MODE": False,
+        "JOINT_METHODS_TO_RUN": [],
+        "BANDWISE_METHODS_TO_RUN": [],
+        "RUN_JOINT_5CH": False,
+        "RUN_BANDWISE_ABLATION": False,
+        "EPOCHS": 50,
+        "PATCHES_PER_EPOCH": 1000,
+        "SAVE_SR_NPY": False,
+        "SAVE_PREVIEW": False,
+        "SAVE_DIFF_MAP": False,
+        "SAVE_CHECKPOINT": False,
+        "MAX_PREVIEW_PER_METHOD": 0,
     },
 }
 
@@ -621,9 +661,11 @@ DEGRADATION_TAG = "" if DEGRADATION_MODE == "area" else f"_{DEGRADATION_MODE}"
 if EXPERIMENT_PRESET == "revision_experiments":
     # Keep B3 quick during a smoke test, full set otherwise.
     EVAL_NOISE_SIGMAS = [0.0, 0.03] if globals().get("SMOKE_TEST", False) else [0.0, 0.01, 0.03]
+elif EXPERIMENT_PRESET == "noise_hat":
+    EVAL_NOISE_SIGMAS = [0.0, 0.01, 0.03]
 else:
     EVAL_NOISE_SIGMAS = [0.0]
-EVAL_NOISE_METHODS = ["edsr", "rcan", "esrgan"]
+EVAL_NOISE_METHODS = ["hat"] if EXPERIMENT_PRESET == "noise_hat" else ["edsr", "rcan", "esrgan"]
 EVAL_NOISE_SCALES = [4]
 
 # --- B2 isolation: when using an alternative degradation, redirect the run and
@@ -741,8 +783,14 @@ if EXPERIMENT_PRESET == "revision_experiments":
     LOSS_ABLATION_MODES = ["joint5ch"]
     LOSS_ABLATION_INCLUDE_FULL_LOSS_BASELINE = True
     LOSS_ABLATION_PROFILE_IDS = ["spatial_no_spectral"]
-elif EXPERIMENT_PRESET in ("degradation_b2", "esrgan_retrain", "hat_bandwise_retrain"):
-    # Pure retrain/degradation runs — no loss ablation.
+elif EXPERIMENT_PRESET == "loss_ablation_hatdat":
+    # Table 7 loss-term ablation for HAT and DAT (joint five-channel).
+    LOSS_ABLATION_METHODS = ["hat", "dat"]
+    LOSS_ABLATION_MODES = ["joint5ch"]
+    LOSS_ABLATION_INCLUDE_FULL_LOSS_BASELINE = False
+    LOSS_ABLATION_PROFILE_IDS = ["l1", "l1_sam", "l1_sam_vi"]
+elif EXPERIMENT_PRESET in ("degradation_b2", "esrgan_retrain", "hat_bandwise_retrain", "noise_hat"):
+    # Pure retrain/degradation/noise-eval runs — no loss ablation.
     RUN_LOSS_ABLATION = False
 
 LOSS_PROFILES = OrderedDict([
