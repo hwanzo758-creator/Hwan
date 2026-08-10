@@ -1,0 +1,2 @@
+scene_id,split,hr_path,lr_x2_path,lr_x3_path,lr_x4_path,source_dataset,notes
+scene_000000,train,HR_npy/scene_000000_HR.npy,LR_x2_npy/scene_000000_LR_x2.npy,LR_x3_npy/scene_000000_LR_x3.npy,LR_x4_npy/scene_000000_LR_x4.npy,AI Hub dataset 71484,example row only

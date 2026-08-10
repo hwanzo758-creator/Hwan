@@ -14,7 +14,7 @@ Main capabilities:
 
 - Joint five-channel SR and band-wise SR evaluation
 - SR scales x2, x3, and x4
-- Bicubic, SRCNN, EDSR, RCAN, SwinIR-based SR, ESRGAN-based SR, HAT-based SR, DAT-based SR, and MambaIR-based SR
+- Bicubic, SRCNN, EDSR, RCAN, SwinIR-based SR, ESRGAN-based SR, HAT-based SR, and DAT-based SR
 - Revision experiments for loss-confounding, parameter capacity, degradation robustness, noise robustness, standard PSNR, excluded-scene reporting, and clipped vegetation-index errors
 - Figure generation for RMSE boxplots, RGB/false-color grids, and NDVI/GNDVI/NDRE error maps
 
@@ -30,7 +30,7 @@ The AI Hub dataset is **not redistributed** in this repository. Users must downl
 
 ## Expected Preprocessed Dataset
 
-`Final_version6_mambair.py` expects a preprocessed dataset directory like this:
+`Final_version5_revision.py` expects a preprocessed dataset directory like this:
 
 ```text
 light_cabbage_training_dataset/
@@ -70,11 +70,9 @@ If the exact manuscript split can be redistributed, place the final `scene_index
 
 ```text
 .
-|-- Final_version6_mambair.py
-|-- selftest_mambair.py
-|-- check_env.py
-|-- Make_NDVI_maps.py
-|-- make_rgb_grids.py
+|-- Final_version5_revision.py
+|-- Make_NDVI_hat_dat.py
+|-- make_rgb_grids_hat_dat.py
 |-- make_fig2_boxplot.py
 |-- requirements.txt
 |-- scene_index_template.csv
@@ -91,11 +89,9 @@ If the exact manuscript split can be redistributed, place the final `scene_index
 
 | File | Purpose |
 |---|---|
-| `Final_version6_mambair.py` | Main training/evaluation pipeline for all nine methods and every revision experiment. Contains the data-integrity filters, patch-quality thresholds, valid-pixel masking, all metric implementations, and the fixed random seed. |
-| `selftest_mambair.py` | Pre-flight check for the MambaIR baseline: exactness of the chunked selective scan against a sequential reference, parameter counts, forward/backward finiteness, peak memory and step time |
-| `check_env.py` | Verifies the required libraries and reports CUDA / GPU availability |
-| `Make_NDVI_maps.py` | Generates the single-scene per-band and vegetation-index error-map outputs |
-| `make_rgb_grids.py` | Generates the RGB, false-color, and zoom comparison grids |
+| `Final_version5_revision.py` | Main training/evaluation pipeline for the manuscript revision experiments |
+| `Make_NDVI_hat_dat.py` | Generates single-scene NDVI, GNDVI, and NDRE error-map outputs with HAT/DAT |
+| `make_rgb_grids_hat_dat.py` | Generates RGB, false-color, and zoom comparison grids with HAT/DAT columns |
 | `make_fig2_boxplot.py` | Generates the x4 band-wise per-scene RMSE boxplot from saved metric CSV files |
 | `scene_index_template.csv` | Example scene-index schema; not the manuscript split itself |
 | `RELEASE_CHECKLIST.md` | Checklist for making the GitHub repository public |
@@ -280,45 +276,3 @@ Large generated artifacts are intentionally ignored by Git, including `.npy`, `.
 If you use this code, please cite the associated manuscript and acknowledge AI Hub dataset code 71484 according to the AI Hub usage policy.
 
 The code is released under the MIT License. The AI Hub dataset is not covered by this license and must be obtained directly from AI Hub.
-
-## Reproducing the Reported Numbers
-
-Every path and preset can be set from the shell, so no source edit is required:
-
-```bash
-export SR_DATASET_DIR=/path/to/light_cabbage_training_dataset
-export SR_OUTPUT_ROOT=/path/to/results
-export SR_RUN_NAME=my_run
-
-# main comparison, all nine methods
-SR_PRESET=revision_experiments SR_SCALES=2,3,4 python -u Final_version6_mambair.py
-
-# a single method (example: the MambaIR baseline)
-SR_PRESET=mambair_only SR_SCALES=2,3,4 python -u Final_version6_mambair.py
-
-# loss-term ablation (Table 7)
-SR_PRESET=loss_ablation_hatdat  SR_SCALES=4 python -u Final_version6_mambair.py
-SR_PRESET=loss_ablation_mambair SR_SCALES=4 python -u Final_version6_mambair.py
-
-# alternative degradation (Table 8)
-SR_DEGRADATION=blur_bicubic SR_PRESET=revision_experiments SR_SCALES=4 python -u Final_version6_mambair.py
-
-# noise robustness (Table 9), evaluation only
-SR_PRESET=noise_hat SR_SCALES=4 python -u Final_version6_mambair.py
-```
-
-Recognised environment variables: `SR_DATASET_DIR`, `SR_OUTPUT_ROOT`, `SR_RUN_NAME`, `SR_PRESET`,
-`SR_SCALES`, `SR_DEGRADATION`, `SR_NOISE_METHODS`, and the MambaIR shape knobs
-`SR_MAMBA_DIM / _GROUPS / _DEPTH / _D_STATE / _EXPAND`.
-
-## Where the Reviewer-Requested Items Live in the Code
-
-| Item | Location in `Final_version6_mambair.py` |
-|---|---|
-| Data-integrity filters (file existence, shape, NaN/Inf) | scene scanning / `CHECK_SCENE_QUALITY_ALL_SCALES` |
-| Patch-quality thresholds (valid ratio, std, dynamic range, LR-up-to-HR RMSE) | `MIN_PATCH_VALID_RATIO`, `MIN_PATCH_STD`, `MIN_PATCH_DYNAMIC_RANGE`, `MAX_PATCH_LRUP_HR_RMSE` |
-| Valid-pixel masking | `USE_MASKED_LOSS`, `masked_l1_loss` and the masked metric helpers |
-| Metric implementations (RMSE, PSNR, standard PSNR, SSIM, SAM, VI errors, band-wise) | metrics section; `REPORT_VI_CLIP01` adds the clipped VI columns |
-| Fixed random seed | `SEED = 42` |
-| Excluded-scene report (RMSE >= 1) | `excluded_scenes_report.csv` written to `sr_logs/` |
-| Model definitions for all nine methods | `build_model()` |

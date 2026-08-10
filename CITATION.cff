@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+message: "If you use this code, please cite the associated manuscript."
+title: "Spectral-Consistency-Aware Evaluation of Deep Super-Resolution Methods for UAV Five-Band Multispectral Crop Imagery"
+type: software
+authors:
+  - family-names: Jung
+    given-names: Whanjo
+  - family-names: Wi
+    given-names: Seung Hwan
+  - family-names: Ryu
+    given-names: Jae-Hyun
+  - family-names: Lee
+    given-names: Hoonsoo
+license: MIT
+year: 2026
+repository-code: "https://github.com/hwanzo758-creator/UAV-Multispectral-Super-Resolution"
+keywords:
+  - UAV
+  - multispectral imagery
+  - super-resolution
+  - spectral consistency
+  - vegetation index
