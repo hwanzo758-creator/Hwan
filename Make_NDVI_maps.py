@@ -1,3 +1,22 @@
+# Make_Figures_9methods.py
+# ------------------------------------------------------------
+# Manuscript Figures 3-7 for NINE SR methods (DRCT included).
+#   bicubic | SRCNN | EDSR | RCAN | SwinIR | ESRGAN | HAT | DAT | DRCT
+#
+# Changed vs Make_NDVI_hat_dat.py:
+#   - DRCT (CVPRW 2024) model definition added, copied verbatim from
+#     Final_version6_drct.py so trained checkpoints load with strict=True
+#   - checkpoint auto-discovery: searches every */sr_checkpoints folder under
+#     the SR_RESULTS root, so DRCT weights are found whatever the run name was
+#   - column-label lists fixed (they were one entry short of the method lists)
+#   - every path overridable by environment variable; no need to edit the file
+#
+# Environment overrides (all optional):
+#   SR_DATASET_DIR  SR_OUTPUT_ROOT  SR_FIG_OUTPUT_DIR  SR_HR_PATH
+#   SR_CKPT_DIRS (colon-separated)  SR_FIG_METHODS  SR_SCALES
+# ------------------------------------------------------------
+#
+# (original header follows)
 # Make_NDVI_bandwise_fixed.py
 # ------------------------------------------------------------
 # 목적:
@@ -25,6 +44,7 @@
 
 from pathlib import Path
 import csv
+import os
 import warnings
 
 import cv2
@@ -41,11 +61,20 @@ import torch.nn.functional as F
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-DATASET_DIR = Path(
-    "/home/whanjo/datasets/Python_file/SR_HR_LR_TEST/light_cabbage_training_dataset"
-)
+DATASET_DIR = Path(os.environ.get(
+    "SR_DATASET_DIR",
+    "/home/whanjo/datasets/Python_file/SR_HR_LR_TEST/light_cabbage_training_dataset",
+))
 
-HR_PATH = DATASET_DIR / "HR_npy" / "scene_012483_1배추_2전라도_2_HR.npy"
+SR_RESULTS_ROOT = Path(os.environ.get(
+    "SR_OUTPUT_ROOT",
+    "/home/whanjo/datasets/Python_file/SR_HR_LR_TEST/"
+    "light_cabbage_training_dataset_SR_RESULTS",
+))
+
+HR_PATH = Path(os.environ["SR_HR_PATH"]) if os.environ.get("SR_HR_PATH") else (
+    DATASET_DIR / "HR_npy" / "scene_012483_1배추_2전라도_2_HR.npy"
+)
 
 CHECKPOINT_DIR = Path(
     "/home/whanjo/datasets/Python_file/SR_HR_LR_TEST/"
@@ -65,13 +94,38 @@ CHECKPOINT_DIR_FALLBACK = Path(
     "sr_checkpoints"
 )
 
-OUTPUT_DIR = Path(
-    "/home/whanjo/datasets/Python_file/SR_HR_LR_TEST/"
-    "single_scene_vi_outputs_scene_012483_ndvi_gndvi_ndre"
-)
+# REVISION (B6): DRCT was trained in a separate run whose folder name this
+# script does not know, so extra sr_checkpoints directories may be listed via
+# SR_CKPT_DIRS and, failing that, the whole SR_RESULTS tree is indexed once at
+# start-up. The script then works regardless of the SR_RUN_NAME used for DRCT.
+EXTRA_CHECKPOINT_DIRS = [
+    Path(p) for p in os.environ.get("SR_CKPT_DIRS", "").split(":") if p.strip()
+]
+AUTO_DISCOVER_CHECKPOINTS = os.environ.get("SR_CKPT_AUTODISCOVER", "1") != "0"
 
-SCALES = [2, 3, 4]
-METHODS = ["srcnn", "edsr", "rcan", "swinir", "esrgan", "hat", "dat", "mambair"]
+OUTPUT_DIR = Path(os.environ.get(
+    "SR_FIG_OUTPUT_DIR",
+    "/home/whanjo/datasets/Python_file/SR_HR_LR_TEST/"
+    "single_scene_vi_outputs_scene_012483_ndvi_gndvi_ndre",
+))
+
+SCALES = [int(v) for v in os.environ.get("SR_SCALES", "2,3,4").split(",") if v.strip()]
+
+# REVISION (B6): DRCT (CVPRW 2024) added as the ninth method.
+ALL_METHODS = ["srcnn", "edsr", "rcan", "swinir", "esrgan", "hat", "dat", "drct"]
+METHODS = ([m.strip() for m in os.environ["SR_FIG_METHODS"].split(",") if m.strip()]
+           if os.environ.get("SR_FIG_METHODS") else list(ALL_METHODS))
+
+# Display labels used by every figure grid. Keeping one dictionary here removes
+# the column-label / method-list mismatch that existed in the previous version.
+METHOD_LABEL = {
+    "hr": "HR", "bicubic": "Bicubic", "srcnn": "SRCNN", "edsr": "EDSR",
+    "rcan": "RCAN", "swinir": "SwinIR", "esrgan": "ESRGAN",
+    "hat": "HAT", "dat": "DAT", "drct": "DRCT",
+}
+
+# Method order used in the overview grids (bicubic first, learned models after).
+GRID_METHODS = ["bicubic"] + list(METHODS)
 MODES = ["joint5ch", "bandwise"]
 INCLUDE_BICUBIC_BASELINE = True
 
@@ -91,6 +145,18 @@ NODATA_THRESHOLD = -9999.0
 
 USE_EXISTING_LR_IF_AVAILABLE = True
 SAVE_SR_NPY = True
+
+# REVISION (B6): reuse SR cubes that a previous run already saved, so adding one
+# method costs one method's inference instead of re-running all nine. The panels
+# and summary rows are still rebuilt for every method, which is what the Fig 6/7
+# overview grids need - only the GPU work is skipped.
+#   SR_REUSE_SAVED=0        recompute everything
+#   SR_FORCE_METHODS=drct   recompute just these, reuse the rest
+REUSE_SAVED_SR = os.environ.get("SR_REUSE_SAVED", "1") != "0"
+FORCE_INFER_METHODS = {
+    m.strip() for m in os.environ.get("SR_FORCE_METHODS", "").split(",") if m.strip()
+}
+_REUSE_STATS = {"reused": 0, "inferred": 0}
 SAVE_LR_NPY_IF_GENERATED = True
 
 # Inference tile
@@ -992,6 +1058,125 @@ class DAT(nn.Module):
         return torch.clamp(out, 0.0, 1.5)
 
 
+# ============================================================
+# REVISION (B6): DRCT - Dense-Residual-Connected Transformer
+# (Hsu et al., "DRCT: Saving Image Super-Resolution away from Information
+#  Bottleneck", CVPRW 2024, NTIRE workshop)
+#
+# Compact reimplementation matched to the existing training budget and written
+# in the same residual-SR template as the other models in this script.
+#
+# DRCT starts from the SwinIR/HAT design and addresses a specific failure mode:
+# in a plain sequential stack of transformer layers the intensity range of the
+# feature maps widens with depth and is then squeezed at the output, so spatial
+# information is lost through an information bottleneck. DRCT removes the
+# bottleneck by connecting the layers densely inside each group - every layer
+# receives the concatenation of the group input and all preceding layer outputs,
+# projected back to a narrow working width by a 1x1 convolution - so early
+# spatial detail stays reachable at the end of the group. The construction is
+# the residual-dense idea of RRDB applied to attention layers rather than to
+# convolutions.
+#
+# Deliberate simplifications, so the model stays inside the same compact and
+# equalized budget as the other baselines:
+#   * the shifted-window attention of the original is replaced by the same
+#     global multi-head attention used by the SwinIR-based and HAT-based
+#     baselines in this script, so the three share one attention implementation;
+#   * the group count, layer count and growth width are reduced.
+# It is therefore referred to as DRCT-based SR, exactly as the SwinIR-based,
+# HAT-based and DAT-based baselines are.
+# ============================================================
+
+DRCT_DIM = int(os.environ.get("SR_DRCT_DIM", "96"))
+DRCT_GROWTH = int(os.environ.get("SR_DRCT_GROWTH", "64"))   # width of each dense layer
+DRCT_DEPTH = int(os.environ.get("SR_DRCT_DEPTH", "5"))      # dense layers per group
+DRCT_GROUPS = int(os.environ.get("SR_DRCT_GROUPS", "6"))
+DRCT_HEADS = int(os.environ.get("SR_DRCT_HEADS", "4"))
+DRCT_RES_SCALE = 0.2
+
+
+class DRCTGroup(nn.Module):
+    """Residual dense group: attention layers joined by dense connections.
+
+    Layer i sees cat(group input, outputs of layers 0..i-1), reduced to
+    DRCT_GROWTH channels by a 1x1 convolution. The group output fuses the same
+    concatenation back to the model width and is added residually, so the group
+    learns a correction rather than a replacement.
+    """
+
+    def __init__(self, dim=DRCT_DIM, growth=DRCT_GROWTH, depth=DRCT_DEPTH,
+                 heads=DRCT_HEADS):
+        super().__init__()
+
+        self.depth = depth
+        self.reduce = nn.ModuleList()
+        self.layers = nn.ModuleList()
+
+        for i in range(depth):
+            self.reduce.append(nn.Conv2d(dim + i * growth, growth, kernel_size=1))
+            self.layers.append(SwinLikeBlock(dim=growth, heads=heads))
+
+        self.fuse = nn.Conv2d(dim + depth * growth, dim, kernel_size=1)
+        self.conv = nn.Conv2d(dim, dim, kernel_size=3, padding=1)
+
+    def forward(self, x):
+        feats = [x]
+
+        for i in range(self.depth):
+            y = self.reduce[i](torch.cat(feats, dim=1))
+            y = self.layers[i](y)
+            feats.append(y)
+
+        out = self.fuse(torch.cat(feats, dim=1))
+        out = self.conv(out)
+
+        return x + out * DRCT_RES_SCALE
+
+
+class DRCT(nn.Module):
+    def __init__(self, scale, channels=5, dim=DRCT_DIM, growth=DRCT_GROWTH,
+                 depth=DRCT_DEPTH, n_groups=DRCT_GROUPS, heads=DRCT_HEADS):
+        super().__init__()
+
+        self.scale = scale
+        self.head = nn.Conv2d(channels, dim, kernel_size=3, padding=1)
+
+        self.body = nn.Sequential(
+            *[DRCTGroup(dim=dim, growth=growth, depth=depth, heads=heads)
+              for _ in range(n_groups)]
+        )
+
+        self.body_conv = nn.Conv2d(dim, dim, kernel_size=3, padding=1)
+        self.up = make_upsampler(scale, dim, activation="gelu")
+        self.tail = nn.Conv2d(dim, channels, kernel_size=3, padding=1)
+
+    def forward(self, x):
+        base = F.interpolate(
+            x,
+            scale_factor=self.scale,
+            mode="bicubic",
+            align_corners=False
+        )
+
+        feat = self.head(x)
+
+        res = self.body(feat)
+        res = self.body_conv(res)
+
+        feat = feat + res
+        feat = self.up(feat)
+        detail = self.tail(feat)
+
+        if USE_RESIDUAL_SR:
+            out = base + detail
+        else:
+            out = detail
+
+        out = torch.clamp(out, 0.0, 1.5)
+
+        return out
+
+
 def build_model(method, scale, channels=5):
     if method == "srcnn":
         return SRCNN(scale=scale, channels=channels)
@@ -1007,6 +1192,9 @@ def build_model(method, scale, channels=5):
         return HAT(scale=scale, channels=channels, dim=96, n_groups=4, depth=4, heads=4)
     if method == "dat":
         return DAT(scale=scale, channels=channels, dim=96, n_groups=4, depth=4, heads=4)
+    # REVISION (B6): DRCT recent SOTA baseline (compact, matched budget).
+    if method == "drct":
+        return DRCT(scale=scale, channels=channels)
     raise ValueError(f"Unsupported method: {method}")
 
 
@@ -1055,15 +1243,78 @@ def get_checkpoint_name(mode, method, scale, band_name=None):
     raise ValueError(f"Unsupported mode: {mode}")
 
 
+_DISCOVERED_CKPTS = None
+
+
+def _discover_checkpoints():
+    """Index every '<name>.pth' under any sr_checkpoints folder in SR_RESULTS_ROOT.
+
+    DRCT was trained in its own run folder, so hard-coding a single directory is
+    fragile. Scanning once at start-up costs a few seconds and makes the script
+    independent of the SR_RUN_NAME that was used. When the same checkpoint name
+    exists in several runs the most recently modified file wins.
+    """
+    global _DISCOVERED_CKPTS
+    if _DISCOVERED_CKPTS is not None:
+        return _DISCOVERED_CKPTS
+
+    found = {}
+    if AUTO_DISCOVER_CHECKPOINTS and SR_RESULTS_ROOT.exists():
+        for p in SR_RESULTS_ROOT.glob("*/sr_checkpoints/*.pth"):
+            prev = found.get(p.name)
+            if prev is None or p.stat().st_mtime > prev.stat().st_mtime:
+                found[p.name] = p
+    _DISCOVERED_CKPTS = found
+    if found:
+        print(f"[INFO] checkpoint index: {len(found)} files under {SR_RESULTS_ROOT}")
+    return found
+
+
 def get_checkpoint_path(mode, method, scale, band_name=None):
     name = get_checkpoint_name(mode, method, scale, band_name)
-    primary = CHECKPOINT_DIR / name
-    if primary.exists():
-        return primary
-    fallback = CHECKPOINT_DIR_FALLBACK / name
-    if fallback.exists():
-        return fallback
-    return primary  # not found in either; triggers the missing-file handling
+
+    # 1) explicit directories, in priority order
+    for d in [CHECKPOINT_DIR, CHECKPOINT_DIR_FALLBACK] + EXTRA_CHECKPOINT_DIRS:
+        cand = d / name
+        if cand.exists():
+            return cand
+
+    # 2) whole-tree index (finds DRCT whatever its run folder is called)
+    hit = _discover_checkpoints().get(name)
+    if hit is not None:
+        return hit
+
+    return CHECKPOINT_DIR / name  # not found; triggers the missing-file handling
+
+
+def report_checkpoint_availability():
+    """Print a mode x method x scale availability matrix before doing any work."""
+    print("\n[CHECK] checkpoint availability")
+    missing = 0
+    for mode in MODES:
+        for method in METHODS:
+            marks = []
+            for scale in SCALES:
+                if mode == "joint5ch":
+                    ok = get_checkpoint_path(mode, method, scale).exists()
+                else:
+                    ok = all(get_checkpoint_path(mode, method, scale, b).exists()
+                             for b in BAND_CODES)
+                marks.append("O" if ok else "X")
+                if not ok:
+                    missing += 1
+            print(f"   {mode:9} {method:8} " +
+                  "  ".join(f"x{sc}:{mk}" for sc, mk in zip(SCALES, marks)))
+    if missing:
+        print(f"   [WARN] {missing} scale-mode-method combinations have no checkpoint.")
+        if REUSE_SAVED_SR:
+            print("          Cells whose SR cube was already saved by an earlier run "
+                  "are still rendered from disk; only genuinely new ones stay blank.")
+        else:
+            print("          Those cells will be blank in the figures.")
+    else:
+        print("   all required checkpoints found")
+    return missing
 
 
 def load_model_from_checkpoint(method, scale, mode="joint5ch", channels=5, band_name=None):
@@ -1111,7 +1362,7 @@ def load_model_from_checkpoint(method, scale, mode="joint5ch", channels=5, band_
 def get_infer_tile_settings(method):
     if method == "swinir":
         return SWINIR_TILE_LR_SIZE, SWINIR_TILE_OVERLAP
-    if method in ("hat", "dat", "mambair"):
+    if method in ("hat", "dat", "drct"):
         return HAT_TILE_LR_SIZE, HAT_TILE_OVERLAP
     return DEFAULT_TILE_LR_SIZE, DEFAULT_TILE_OVERLAP
 
@@ -1492,8 +1743,8 @@ def find_summary_row(summary_rows, scale, mode, method):
 
 def make_vi_overview_grid(summary_rows, out_path, mode, cell_size=(120, 120)):
     """Create an overview panel like: rows = VI x scale, columns = HR + methods."""
-    columns = ["HR", "Bicubic", "SRCNN", "EDSR", "RCAN", "SwinIR", "ESRGAN", "HAT", "DAT"]
-    methods = ["hr", "bicubic", "srcnn", "edsr", "rcan", "swinir", "esrgan", "hat", "dat", "mambair"]
+    methods = ["hr"] + GRID_METHODS
+    columns = [METHOD_LABEL[m] for m in methods]
     indices = ["NDVI", "GNDVI", "NDRE"]
 
     cell_w, cell_h = cell_size
@@ -1568,7 +1819,7 @@ def compute_shared_error_vmax(summary_rows, mode, row_specs):
         return float(ERROR_MAP_FIXED_VMAX)
 
     vmax_values = []
-    methods = ["bicubic", "srcnn", "edsr", "rcan", "swinir", "esrgan", "hat", "dat", "mambair"]
+    methods = list(GRID_METHODS)
 
     for _, _, npy_key in row_specs:
         for scale in SCALES:
@@ -1613,8 +1864,8 @@ def error_array_to_grid_rgb(err, shared_vmax, cell_size):
 
 def make_error_overview_grid(summary_rows, out_path, mode, row_specs, cell_size=(120, 120)):
     """Create an error-map overview panel with one shared color bar for the full grid."""
-    columns = ["Bicubic", "SRCNN", "EDSR", "RCAN", "SwinIR", "ESRGAN", "HAT", "DAT"]
-    methods = ["bicubic", "srcnn", "edsr", "rcan", "swinir", "esrgan", "hat", "dat", "mambair"]
+    methods = list(GRID_METHODS)
+    columns = [METHOD_LABEL[m] for m in methods]
 
     cell_w, cell_h = cell_size
     left_margin = 122
@@ -1737,7 +1988,7 @@ def main():
     if not HR_PATH.exists():
         raise FileNotFoundError(f"HR file not found: {HR_PATH}")
 
-    if not CHECKPOINT_DIR.exists():
+    if not CHECKPOINT_DIR.exists() and not AUTO_DISCOVER_CHECKPOINTS:
         raise FileNotFoundError(f"CHECKPOINT_DIR not found: {CHECKPOINT_DIR}")
 
     hr_raw = np.load(HR_PATH).astype(np.float32)
@@ -1756,7 +2007,14 @@ def main():
     print(f"OUTPUT_DIR     : {OUTPUT_DIR}")
     print(f"DEVICE         : {DEVICE}")
     print(f"HR shape       : {hr_raw.shape}")
+    print(f"METHODS        : {', '.join(METHODS)}")
+    print(f"REUSE saved SR : {REUSE_SAVED_SR}"
+          + (f"  (force re-infer: {', '.join(sorted(FORCE_INFER_METHODS))})"
+             if FORCE_INFER_METHODS else ""))
+    print(f"SCALES         : {SCALES}")
     print("====================================================")
+
+    report_checkpoint_availability()
 
     for scale in SCALES:
         scale_out_dir = OUTPUT_DIR / f"x{scale}"
@@ -1828,17 +2086,42 @@ def main():
                 method_out_dir = scale_out_dir / mode / method
                 ensure_dir(method_out_dir)
 
+                cached_sr_path = (method_out_dir /
+                                  f"{scene_id}_x{scale}_{mode}_{method}_SR.npy")
+                reuse = (REUSE_SAVED_SR
+                         and method not in FORCE_INFER_METHODS
+                         and cached_sr_path.exists())
+
                 try:
-                    if mode == "joint5ch":
-                        sr_cube, ckpt_info = infer_joint5ch(method, scale, lr_cube)
-                        checkpoint_str = str(ckpt_info)
+                    sr_cube = None
+                    checkpoint_str = ""
 
-                    elif mode == "bandwise":
-                        sr_cube, ckpt_info = infer_bandwise(method, scale, lr_cube)
-                        checkpoint_str = " | ".join(ckpt_info) if isinstance(ckpt_info, list) else str(ckpt_info)
+                    if reuse:
+                        cached = np.load(cached_sr_path).astype(np.float32)
+                        if cached.shape[:2] == hr_aligned.shape[:2]:
+                            sr_cube = cached
+                            checkpoint_str = f"reused saved cube: {cached_sr_path}"
+                            _REUSE_STATS["reused"] += 1
+                            print("       reusing saved SR cube (no inference)")
+                        else:
+                            print(f"       saved cube shape {cached.shape[:2]} != "
+                                  f"HR {hr_aligned.shape[:2]}; re-running inference")
+                            reuse = False
 
-                    else:
-                        raise ValueError(f"Unsupported mode: {mode}")
+                    if sr_cube is None:
+                        if mode == "joint5ch":
+                            sr_cube, ckpt_info = infer_joint5ch(method, scale, lr_cube)
+                            checkpoint_str = str(ckpt_info)
+
+                        elif mode == "bandwise":
+                            sr_cube, ckpt_info = infer_bandwise(method, scale, lr_cube)
+                            checkpoint_str = " | ".join(ckpt_info) if isinstance(ckpt_info, list) else str(ckpt_info)
+
+                        else:
+                            raise ValueError(f"Unsupported mode: {mode}")
+
+                        if sr_cube is not None:
+                            _REUSE_STATS["inferred"] += 1
 
                     if sr_cube is None:
                         print(f"[WARN] Missing checkpoint -> skip: {checkpoint_str}")
@@ -1958,8 +2241,18 @@ def main():
         overview_grid_paths.extend(save_error_overview_grids(summary_rows, OUTPUT_DIR))
 
 
+    ok = sum(1 for r in summary_rows if r.get("status") == "done")
+    skipped = sum(1 for r in summary_rows if r.get("status") == "checkpoint_missing")
+
     print("\n====================================================")
     print("[DONE]")
+    print(f"Cells      : {ok} rendered, {skipped} skipped (no checkpoint)")
+    print(f"GPU work   : {_REUSE_STATS['inferred']} inferred, "
+          f"{_REUSE_STATS['reused']} reused from saved cubes")
+    if skipped:
+        miss = sorted({(r["mode"], r["method"]) for r in summary_rows
+                       if r.get("status") == "checkpoint_missing"})
+        print("  missing    : " + ", ".join(f"{m}/{me}" for m, me in miss))
     print(f"Summary CSV: {summary_csv}")
     for p in overview_grid_paths:
         print(f"Overview   : {p}")
